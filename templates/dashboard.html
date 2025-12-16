@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ data.league_name }} // LIVE OPS</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* --- THEME --- */
+        body { background-color: #0b0c10; color: #c5c6c7; font-family: 'JetBrains Mono', monospace; margin-top: 70px; display: flex; flex-direction: column; min-height: 100vh; }
+        
+        /* --- NAVBAR --- */
+        .cyber-nav {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 60px;
+            background-color: #1f2833;
+            border-bottom: 1px solid #45a29e;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 2rem; z-index: 1000;
+            box-shadow: 0 4px 15px rgba(102, 252, 241, 0.1);
+        }
+        .nav-brand { font-size: 1.2rem; font-weight: 800; color: #c5c6c7; text-decoration: none; letter-spacing: -1px; }
+        .nav-brand span { color: #66fcf1; }
+        .nav-links { display: flex; gap: 20px; }
+        .nav-item {
+            text-decoration: none; color: #c5c6c7; font-size: 0.9rem; font-weight: bold;
+            text-transform: uppercase; padding: 5px 10px; border: 1px solid transparent; transition: all 0.2s;
+        }
+        .nav-item:hover { color: #66fcf1; text-shadow: 0 0 5px rgba(102, 252, 241, 0.5); }
+        .nav-item.active {
+            color: #0b0c10; background-color: #66fcf1; border-color: #66fcf1;
+            box-shadow: 0 0 10px rgba(102, 252, 241, 0.4);
+        }
+
+        /* --- CONTENT --- */
+        .container { flex: 1; } 
+        .card { background-color: #1f2833; border: 1px solid #45a29e; margin-top: 20px; margin-bottom: 40px; }
+        table { color: #c5c6c7; font-size: 0.85rem; }
+        thead { color: #66fcf1; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 1px; }
+        td { vertical-align: middle; }
+        
+        /* Model Columns Styling */
+        .col-trinity { border-left: 2px solid #9b59b6; padding-left: 10px; background: rgba(155, 89, 182, 0.05); }
+        .col-anchor { border-left: 2px solid #3498db; padding-left: 10px; background: rgba(52, 152, 219, 0.05); }
+        .col-rebel { border-left: 2px solid #e74c3c; padding-left: 10px; background: rgba(231, 76, 60, 0.05); }
+        
+        .val-text { font-weight: bold; }
+        .t-val { color: #9b59b6; } .a-val { color: #3498db; } .r-val { color: #e74c3c; }
+
+        /* --- FOOTER --- */
+        .cyber-footer {
+            text-align: center; padding: 30px 0; color: #6c757d; font-size: 0.75rem;
+            border-top: 1px solid #1f2833; background-color: #0b0c10; letter-spacing: 1px;
+            margin-top: auto;
+        }
+        .cyber-footer span { color: #66fcf1; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <nav class="cyber-nav">
+        <a href="/" class="nav-brand">kickoff<span>.ai</span></a>
+        <div class="nav-links">
+            <a href="/?league=E0" class="nav-item {% if league_code == 'E0' %}active{% endif %}">UK</a>
+            <a href="/?league=SP1" class="nav-item {% if league_code == 'SP1' %}active{% endif %}">ESP</a>
+            <a href="/?league=D1" class="nav-item {% if league_code == 'D1' %}active{% endif %}">GER</a>
+            <a href="/?league=I1" class="nav-item {% if league_code == 'I1' %}active{% endif %}">ITA</a>
+            <a href="/?league=F1" class="nav-item {% if league_code == 'F1' %}active{% endif %}">FRA</a>
+            
+            <a href="/the-ai" class="nav-item {% if request.path == '/the-ai' %}active{% endif %}">THE AI</a>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        
+        <h4 style="color:#66fcf1; margin-bottom: 1rem;">:: LIVE ODDS // {{ data.league_name }}</h4>
+        
+        {% if not data.live %}
+        <div class="card p-5 text-center" style="color: #66fcf1; border: 1px dashed #45a29e;">
+            NO LIVE GAMES DETECTED.<br>
+            <span style="font-size:0.8rem; color:#888">SYSTEM STANDBY</span>
+        </div>
+        {% else %}
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table table-dark table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 10%">Date</th>
+                            <th style="width: 25%">Fixture</th>
+                            <th style="width: 14%">Odds</th>
+                            <th style="width: 17%">TRINITY</th>
+                            <th style="width: 17%">ANCHOR</th>
+                            <th style="width: 17%">REBEL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for g in data.live %}
+                        <tr>
+                            <td style="color:#888">{{ g.date }}</td>
+                            <td>
+                                <div style="font-weight:bold; color:#fff">{{ g.home_team }}</div>
+                                <div style="font-size:0.8em; color:#888">vs {{ g.away_team }}</div>
+                            </td>
+                            <td style="font-size:0.8rem">{{ g.odds_h }} | {{ g.odds_d }} | {{ g.odds_a }}</td>
+                            <td><div class="col-trinity">H: <span class="val-text t-val">{{ g.trinity_h }}</span><br>A: <span class="val-text t-val">{{ g.trinity_a }}</span></div></td>
+                            <td><div class="col-anchor">H: <span class="val-text a-val">{{ g.anchor_h }}</span><br>A: <span class="val-text a-val">{{ g.anchor_a }}</span></div></td>
+                            <td><div class="col-rebel">H: <span class="val-text r-val">{{ g.rebel_h }}</span><br>A: <span class="val-text r-val">{{ g.rebel_a }}</span></div></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <h5 class="mb-3" style="color:#c5c6c7; border-left:4px solid #45a29e; padding-left:10px;">:: RECENT INTELLIGENCE LOG</h5>
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table table-dark table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th style="width: 10%">Date</th>
+                            <th style="width: 30%">Fixture</th>
+                            <th style="width: 15%">Result</th>
+                            <th style="width: 15%; color:#9b59b6">Trinity</th>
+                            <th style="width: 15%; color:#3498db">Anchor</th>
+                            <th style="width: 15%; color:#e74c3c">Rebel</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for h in data.history %}
+                        <tr>
+                            <td style="color:#888">{{ h.date }}</td>
+                            <td style="font-weight:bold;">{{ h.fixture }}</td>
+                            <td style="font-weight:bold; color:#fff">{{ h.result }}</td>
+                            <td style="color:#9b59b6">{{ h.pred_trinity }}</td>
+                            <td style="color:#3498db">{{ h.pred_anchor }}</td>
+                            <td style="color:#e74c3c">{{ h.pred_rebel }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+    </div>
+
+    <footer class="cyber-footer">
+        kickoff<span>.ai</span> 2025 | Powered By Passion | Stats by Football-data.co.uk | Odds by The Odds API
+    </footer>
+
+</body>
+</html>
