@@ -1,0 +1,153 @@
+:root {
+    --bg-color: #0f1115;
+    --card-bg: #161b22;
+    --text-main: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --border: #30363d;
+    
+    --green-val: #238636;
+    --blue-val: #1f6feb;
+    --orange-val: #d29922;
+    --gray-val: #30363d;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-main);
+    font-family: 'JetBrains Mono', monospace;
+    margin: 0;
+    padding: 40px 20px;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 30px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 20px;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    background-color: #2ea043;
+    border-radius: 50%;
+    margin-right: 15px;
+    box-shadow: 0 0 10px #2ea043;
+}
+
+h1 {
+    font-size: 1.2rem;
+    letter-spacing: -0.5px;
+    margin: 0;
+}
+
+/* TABLE STYLES */
+.table-wrapper {
+    overflow-x: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background: #21262d;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    text-align: left;
+    padding: 12px 20px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+}
+
+td {
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.95rem;
+    vertical-align: middle;
+}
+
+tr:last-child td {
+    border-bottom: none;
+}
+
+tr:hover {
+    background-color: #21262d;
+}
+
+/* COLUMN SPECIFICS */
+.date {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+
+.fixture {
+    font-weight: bold;
+}
+
+.vs {
+    color: var(--text-dim);
+    margin: 0 8px;
+    font-weight: normal;
+    font-size: 0.8rem;
+}
+
+.odds {
+    color: var(--accent);
+    font-weight: bold;
+}
+
+.model-hybrid {
+    color: #e2e8f0;
+}
+
+/* BADGES */
+.badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    color: white;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.neutral {
+    background-color: var(--gray-val);
+    color: var(--text-dim);
+    font-weight: normal;
+}
+
+.value-home {
+    background-color: var(--green-val);
+    box-shadow: 0 0 10px rgba(46, 160, 67, 0.2);
+}
+
+.value-away {
+    background-color: var(--blue-val);
+    box-shadow: 0 0 10px rgba(31, 111, 235, 0.2);
+}
+
+.value-draw {
+    background-color: var(--orange-val);
+    color: #000;
+}
+
+footer {
+    margin-top: 20px;
+    text-align: right;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+}
