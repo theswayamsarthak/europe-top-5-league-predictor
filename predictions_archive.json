@@ -1,0 +1,417 @@
+{
+    "E0-Newcastle-Chelsea": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Bournemouth-Burnley": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Wolves-Brentford": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "E0-Brighton-Sunderland": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Man City-West Ham": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Tottenham-Liverpool": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "E0-Everton-Arsenal": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "E0-Leeds-Crystal Palace": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "E0-Aston Villa-Man United": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Fulham-Nott'm Forest": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Man United-Newcastle": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Nott'm Forest-Man City": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "E0-Arsenal-Brighton": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Brentford-Bournemouth": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Burnley-Everton": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "E0-West Ham-Fulham": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "AWAY"
+    },
+    "E0-Liverpool-Wolves": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Chelsea-Aston Villa": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Sunderland-Leeds": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "E0-Crystal Palace-Tottenham": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Valencia-Mallorca": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Oviedo-Celta": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "SP1-Levante-Sociedad": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "DRAW"
+    },
+    "SP1-Osasuna-Alaves": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Real Madrid-Sevilla": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Girona-Ath Madrid": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "SP1-Villarreal-Barcelona": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "SP1-Elche-Vallecano": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "DRAW"
+    },
+    "SP1-Betis-Getafe": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Ath Bilbao-Espanol": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Vallecano-Getafe": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Celta-Valencia": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Osasuna-Ath Bilbao": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "SP1-Elche-Villarreal": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "SP1-Espanol-Barcelona": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "SP1-Sevilla-Levante": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Real Madrid-Betis": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Alaves-Oviedo": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Mallorca-Girona": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "SP1-Sociedad-Ath Madrid": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "D1-Dortmund-M'gladbach": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-FC Koln-Union Berlin": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "D1-Augsburg-Werder Bremen": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "D1-Hamburg-Ein Frankfurt": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "DRAW"
+    },
+    "D1-Wolfsburg-Freiburg": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "DRAW"
+    },
+    "D1-Stuttgart-Hoffenheim": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-RB Leipzig-Leverkusen": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-Mainz-St Pauli": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "D1-Heidenheim-Bayern Munich": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "D1-Ein Frankfurt-Dortmund": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-Heidenheim-FC Koln": {
+        "pred_trinity": "DRAW",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "D1-St Pauli-RB Leipzig": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "D1-Union Berlin-Mainz": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-Freiburg-Hamburg": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-Werder Bremen-Hoffenheim": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "D1-Leverkusen-Stuttgart": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-M'gladbach-Augsburg": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "D1-Bayern Munich-Wolfsburg": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Lazio-Cremonese": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Juventus-Roma": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Cagliari-Pisa": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "HOME"
+    },
+    "I1-Sassuolo-Torino": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Fiorentina-Udinese": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "DRAW"
+    },
+    "I1-Genoa-Atalanta": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "I1-Parma-Fiorentina": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "HOME"
+    },
+    "I1-Torino-Cagliari": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Lecce-Como": {
+        "pred_trinity": "DRAW",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "I1-Udinese-Lazio": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "I1-Pisa-Juventus": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "I1-Milan-Verona": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Cremonese-Napoli": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "I1-Bologna-Sassuolo": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "I1-Atalanta-Inter": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "I1-Roma-Genoa": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Toulouse-Lens": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "DRAW",
+        "pred_rebel": "DRAW"
+    },
+    "F1-Monaco-Lyon": {
+        "pred_trinity": "AWAY",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Nice-Strasbourg": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "AWAY",
+        "pred_rebel": "AWAY"
+    },
+    "F1-Lille-Rennes": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Marseille-Nantes": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Le Havre-Angers": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Brest-Auxerre": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Lorient-Metz": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    },
+    "F1-Paris SG-Paris FC": {
+        "pred_trinity": "HOME",
+        "pred_anchor": "HOME",
+        "pred_rebel": "HOME"
+    }
+}

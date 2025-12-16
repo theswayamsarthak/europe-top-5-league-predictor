@@ -1,0 +1,183 @@
+import os
+import datetime
+from flask import Flask, render_template, redirect, url_for, request
+from model_manager import ModelManager
+import traceback
+import master_feed
+
+app = Flask(__name__)
+manager = ModelManager()
+
+# --- CONFIGURATION ---
+ADMIN_PASSWORD = "swayam007" 
+
+# Map Codes to Readable Names
+LEAGUE_MAP = {
+    'E0': 'Premier League (UK)',
+    'SP1': 'La Liga (Spain)',
+    'D1': 'Bundesliga (Germany)',
+    'I1': 'Serie A (Italy)',
+    'F1': 'Ligue 1 (France)'
+}
+
+# --- HELPER: Get Last Update Time ---
+def get_last_update_time():
+    """
+    Checks the modification time of the Premier League data file
+    to determine when the system was last refreshed.
+    """
+    try:
+        # Adjust path if your folder is named differently
+        file_path = os.path.join('data', 'E0.json') 
+        
+        if os.path.exists(file_path):
+            timestamp = os.path.getmtime(file_path)
+            dt_object = datetime.datetime.fromtimestamp(timestamp)
+            return dt_object.strftime("%d %b %Y @ %H:%M") # e.g. "15 Dec 2025 @ 14:30"
+    except Exception:
+        pass
+    return "Unknown"
+
+# --- HELPER: Calculate Stats on the Fly ---
+def calculate_live_stats():
+    stats_output = {}
+    for code, name in LEAGUE_MAP.items():
+        # Get data (force no cache if needed, but standard get is fine)
+        data = manager.get_dashboard_data(league_code=code)
+        history = data.get('history', [])
+        
+        league_stats = {
+            "name": name,
+            "trinity": {"l10": "0%", "cum": "0%"},
+            "anchor": {"l10": "0%", "cum": "0%"},
+            "rebel": {"l10": "0%", "cum": "0%"}
+        }
+        
+        if not history:
+            stats_output[code] = league_stats
+            continue
+
+        def get_acc(game_list, model_key):
+            if not game_list: return "0%"
+            correct = 0
+            valid_games = 0
+            for game in game_list:
+                res_str = game['result']
+                # parse result string "(H)" etc
+                if "(H)" in res_str: actual = "HOME"
+                elif "(A)" in res_str: actual = "AWAY"
+                else: actual = "DRAW"
+                
+                pred = game.get(model_key, "N/A")
+                if pred != "N/A":
+                    valid_games += 1
+                    if pred == actual: correct += 1
+            
+            if valid_games == 0: return "0%"
+            return f"{int((correct/valid_games)*100)}%"
+
+        # Calculate Cumulative (All history)
+        league_stats['trinity']['cum'] = get_acc(history, 'pred_trinity')
+        league_stats['anchor']['cum']  = get_acc(history, 'pred_anchor')
+        league_stats['rebel']['cum']   = get_acc(history, 'pred_rebel')
+
+        # Calculate L10 (Last 10 games)
+        l10_games = history[-10:] if len(history) >= 10 else history
+        league_stats['trinity']['l10'] = get_acc(l10_games, 'pred_trinity')
+        league_stats['anchor']['l10']  = get_acc(l10_games, 'pred_anchor')
+        league_stats['rebel']['l10']   = get_acc(l10_games, 'pred_rebel')
+        
+        stats_output[code] = league_stats
+
+    return stats_output
+
+# --- ROUTES ---
+
+@app.route('/')
+def home():
+    league_code = request.args.get('league')
+    
+    # 1. If no league specified, show the Landing Page (index.html)
+    if not league_code:
+        return render_template('index.html', leagues=LEAGUE_MAP)
+
+    # 2. Validate League Code
+    if league_code not in LEAGUE_MAP:
+        league_code = 'E0'
+
+    try:
+        # 3. Get the Data Package
+        data = manager.get_dashboard_data(league_code=league_code)
+        
+        # FIX: Ensure the dictionary has the readable name for the HTML to use
+        data['league_name'] = LEAGUE_MAP[league_code]
+
+        # 4. Render Dashboard with the 'data' object
+        return render_template(
+            'dashboard.html', 
+            data=data,              # <--- This matches your HTML structure (data.live, etc)
+            league_code=league_code
+        )
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR in Dashboard for {league_code}: {e}")
+        traceback.print_exc()
+        return f"<h3>System Error loading {league_code}</h3><p>Check server logs.</p>", 500
+
+@app.route('/refresh')
+def refresh():
+    pwd = request.args.get('pwd')
+    target_league = request.args.get('league') 
+    
+    if pwd == ADMIN_PASSWORD:
+        manager.clear_cache()
+        if target_league and target_league in LEAGUE_MAP:
+            return redirect(url_for('home', league=target_league))
+        return redirect(url_for('home'))
+    else:
+        return "<h3>ACCESS DENIED: Authorization Required.</h3>", 403
+
+@app.route('/refresh-global')
+def refresh_global():
+    pwd = request.args.get('pwd')
+    if pwd != ADMIN_PASSWORD:
+        return "<h3>ACCESS DENIED. AUTHORIZATION REQUIRED.</h3>", 403
+
+    print(":: GLOBAL AI UPDATE TRIGGERED ::")
+    try:
+        success = master_feed.force_update_all()
+        if success:
+            # Clear cache so new data shows up immediately
+            manager.clear_cache()
+            
+            next_page = request.args.get('next')
+            league_code = request.args.get('league')
+            
+            if next_page == 'dashboard' and league_code:
+                return redirect(url_for('home', league=league_code))
+            return redirect(url_for('the_ai'))
+        else:
+            return "Error during global update. Check terminal for logs."
+    except Exception as e:
+        print(f"Global Refresh Error: {e}")
+        return f"Global Refresh Failed: {e}"
+
+@app.route('/the-ai')
+def the_ai():
+    # Calculate stats for all leagues
+    live_stats = calculate_live_stats()
+    
+    # Get timestamp
+    last_update_time = get_last_update_time()
+    
+    # Define current matchday manually or logic
+    current_matchday = 5 
+    
+    return render_template(
+        'the_ai.html', 
+        stats=live_stats, 
+        last_updated=last_update_time, 
+        matchday=current_matchday 
+    )
+
+if __name__ == '__main__':
+    app.run(debug=True)
