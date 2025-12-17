@@ -1,7 +1,9 @@
 flask
-requests
 pandas
 scikit-learn
 beautifulsoup4
-lxml
+requests
 gunicorn
+xgboost
+joblib
+lxml
