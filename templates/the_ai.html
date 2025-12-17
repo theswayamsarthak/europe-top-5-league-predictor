@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>kickoff.ai // Architecture</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Montserrat:wght@800&display=swap" rel="stylesheet">
+    <style>
+        /* --- GLOBAL THEME --- */
+        body { 
+            background-color: #0b0c10; 
+            color: #c5c6c7; 
+            font-family: 'JetBrains Mono', monospace; 
+            margin-top: 60px; 
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* --- NAVBAR --- */
+        .cyber-nav {
+            position: fixed; top: 0; left: 0; width: 100%; height: 60px;
+            background-color: #1f2833; border-bottom: 1px solid #45a29e;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 2rem; z-index: 1000;
+            box-shadow: 0 4px 15px rgba(102, 252, 241, 0.1);
+        }
+        .nav-brand { font-size: 1.2rem; font-weight: 800; color: #c5c6c7; text-decoration: none; letter-spacing: -1px; }
+        .nav-brand span { color: #66fcf1; }
+        .nav-links { display: flex; gap: 20px; }
+        .nav-item {
+            text-decoration: none; color: #c5c6c7; font-size: 0.9rem; font-weight: bold;
+            text-transform: uppercase; padding: 5px 10px; transition: all 0.2s;
+        }
+        .nav-item:hover { color: #66fcf1; text-shadow: 0 0 5px rgba(102, 252, 241, 0.5); }
+        .nav-item.active { color: #0b0c10; background-color: #66fcf1; border-radius: 2px; }
+
+        /* --- SECTIONS --- */
+        .section-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 4rem 1rem;
+        }
+
+        h1, h2, h3 { color: #66fcf1; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: -1px; }
+        h1 { font-size: 3rem; margin-bottom: 1rem; text-align: center; text-shadow: 0 0 20px rgba(102, 252, 241, 0.2); }
+        h2 { font-size: 1.8rem; border-left: 4px solid #66fcf1; padding-left: 15px; margin-top: 3rem; margin-bottom: 1.5rem; }
+        
+        .intro-text { font-size: 1.1rem; color: #888; text-align: center; max-width: 700px; margin: 0 auto 3rem auto; }
+        p { margin-bottom: 1.5rem; color: #c5c6c7; }
+
+        /* --- MODEL CARDS --- */
+        .model-section {
+            background: #1f2833;
+            border: 1px solid #333;
+            padding: 2rem;
+            margin-bottom: 3rem;
+            border-radius: 4px;
+            position: relative;
+        }
+        .border-trinity { border-top: 4px solid #9b59b6; }
+        .border-anchor { border-top: 4px solid #3498db; }
+        .border-rebel { border-top: 4px solid #e74c3c; }
+        .text-trinity { color: #9b59b6; }
+        .text-anchor { color: #3498db; }
+        .text-rebel { color: #e74c3c; }
+
+        /* --- ACCURACY TABLE --- */
+        .acc-table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; font-size: 0.85rem; }
+        .acc-table th { text-align: left; padding: 10px; border-bottom: 1px solid #45a29e; color: #66fcf1; text-transform: uppercase; }
+        .acc-table td { padding: 10px; border-bottom: 1px solid #333; color: #c5c6c7; }
+        .acc-table tr:last-child td { border-bottom: none; }
+        .stat-badge { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 3px; font-weight: bold; }
+
+        /* --- METRICS GRID --- */
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem; }
+        .metric-card { background: #0b0c10; border: 1px solid #45a29e; padding: 1rem; text-align: center; transition: 0.3s; }
+        .metric-card:hover { background: #45a29e; color: #0b0c10; transform: translateY(-5px); }
+        .metric-title { font-weight: bold; margin-bottom: 0.5rem; display: block; }
+        .metric-desc { font-size: 0.8rem; opacity: 0.8; }
+
+        /* --- FOOTER --- */
+        .cyber-footer {
+            text-align: center; padding: 30px 0; color: #6c757d; font-size: 0.75rem;
+            border-top: 1px solid #1f2833; background-color: #0b0c10; letter-spacing: 1px;
+        }
+        .cyber-footer span { color: #66fcf1; font-weight: bold; }
+
+    </style>
+</head>
+<body>
+
+    {# --- STATS CONFIGURATION --- #}
+    {# Set this to the Matchday you want stats to START showing #}
+    {% set stats_start_matchday = 6 %}
+
+    {# Logic: Only show stats if current matchday >= threshold. Else show '--' #}
+    {% set show_stats = matchday is defined and matchday >= stats_start_matchday %}
+
+    {# Helper Macro to render stat or placeholder #}
+    {% macro get_stat(league, model, metric) %}
+        {% if show_stats %}
+            {{ stats.get(league, {}).get(model, {}).get(metric, 'N/A') }}
+        {% else %}
+            --
+        {% endif %}
+    {% endmacro %}
+
+    <nav class="cyber-nav">
+        <a href="/" class="nav-brand">kickoff<span>.ai</span></a>
+        <div class="nav-links">
+            <a href="/?league=E0" class="nav-item {% if league_code == 'E0' %}active{% endif %}">UK</a>
+            <a href="/?league=SP1" class="nav-item {% if league_code == 'SP1' %}active{% endif %}">ESP</a>
+            <a href="/?league=D1" class="nav-item {% if league_code == 'D1' %}active{% endif %}">GER</a>
+            <a href="/?league=I1" class="nav-item {% if league_code == 'I1' %}active{% endif %}">ITA</a>
+            <a href="/?league=F1" class="nav-item {% if league_code == 'F1' %}active{% endif %}">FRA</a>
+            
+            <a href="/the-ai" class="nav-item {% if request.path == '/the-ai' %}active{% endif %}">THE AI</a>
+        </div>
+    </nav>
+
+    <div class="section-container">
+
+        <h1>THE ARCHITECTURE</h1>
+        
+        <div class="intro-text">
+            Football is often called the beautiful game, driven by emotion, chaos, and moments of individual brilliance. 
+            <br><br>
+            We believe that within that chaos lies a signal. kickoff.ai is not about gut feelings or punditry. 
+            It is a purely mathematical attempt to quantify the future using historical data, market inefficiencies, and statistical modeling.
+        </div>
+
+        <hr style="border-color: #333; margin: 3rem 0;">
+
+        <div class="model-section border-trinity">
+            <h3 class="text-trinity">: : THE TRINITY</h3>
+            <p>
+                <strong>The Consensus Engine.</strong> Trinity is an ensemble classifier that aggregates votes from three distinct algorithms: 
+                XGBoost (Gradient Boosting), Random Forest, and Logistic Regression.
+            </p>
+            <table class="acc-table">
+                <thead>
+                    <tr><th>League</th><th>Last 10 Matches (Acc)</th><th>Cumulative Accuracy</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Premier League (UK)</td> <td><span class="stat-badge text-trinity">{{ get_stat('E0', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('E0', 'trinity', 'cum') }}</td></tr>
+                    <tr><td>La Liga (ESP)</td>       <td><span class="stat-badge text-trinity">{{ get_stat('SP1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('SP1', 'trinity', 'cum') }}</td></tr>
+                    <tr><td>Bundesliga (GER)</td>    <td><span class="stat-badge text-trinity">{{ get_stat('D1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('D1', 'trinity', 'cum') }}</td></tr>
+                    <tr><td>Serie A (ITA)</td>       <td><span class="stat-badge text-trinity">{{ get_stat('I1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('I1', 'trinity', 'cum') }}</td></tr>
+                    <tr><td>Ligue 1 (FRA)</td>       <td><span class="stat-badge text-trinity">{{ get_stat('F1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('F1', 'trinity', 'cum') }}</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="model-section border-anchor">
+            <h3 class="text-anchor">: : THE ANCHOR</h3>
+            <p>
+                <strong>The Stabilizer.</strong> Anchor is our most conservative model. It weighs heavily on 
+                <strong>Market Implied Probabilities</strong> and defensive metrics.
+            </p>
+            <table class="acc-table">
+                <thead>
+                    <tr><th>League</th><th>Last 10 Matches (Acc)</th><th>Cumulative Accuracy</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Premier League (UK)</td> <td><span class="stat-badge text-anchor">{{ get_stat('E0', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('E0', 'anchor', 'cum') }}</td></tr>
+                    <tr><td>La Liga (ESP)</td>       <td><span class="stat-badge text-anchor">{{ get_stat('SP1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('SP1', 'anchor', 'cum') }}</td></tr>
+                    <tr><td>Bundesliga (GER)</td>    <td><span class="stat-badge text-anchor">{{ get_stat('D1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('D1', 'anchor', 'cum') }}</td></tr>
+                    <tr><td>Serie A (ITA)</td>       <td><span class="stat-badge text-anchor">{{ get_stat('I1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('I1', 'anchor', 'cum') }}</td></tr>
+                    <tr><td>Ligue 1 (FRA)</td>       <td><span class="stat-badge text-anchor">{{ get_stat('F1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('F1', 'anchor', 'cum') }}</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="model-section border-rebel">
+            <h3 class="text-rebel">: : THE REBEL</h3>
+            <p>
+                <strong>The Value Hunter.</strong> Rebel is the chaotic element. It is programmed to ignore market odds entirely 
+                and focus purely on raw performance metrics like Expected Goals (xG).
+            </p>
+            <table class="acc-table">
+                <thead>
+                    <tr><th>League</th><th>Last 10 Matches (Acc)</th><th>Cumulative Accuracy</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Premier League (UK)</td> <td><span class="stat-badge text-rebel">{{ get_stat('E0', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('E0', 'rebel', 'cum') }}</td></tr>
+                    <tr><td>La Liga (ESP)</td>       <td><span class="stat-badge text-rebel">{{ get_stat('SP1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('SP1', 'rebel', 'cum') }}</td></tr>
+                    <tr><td>Bundesliga (GER)</td>    <td><span class="stat-badge text-rebel">{{ get_stat('D1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('D1', 'rebel', 'cum') }}</td></tr>
+                    <tr><td>Serie A (ITA)</td>       <td><span class="stat-badge text-rebel">{{ get_stat('I1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('I1', 'rebel', 'cum') }}</td></tr>
+                    <tr><td>Ligue 1 (FRA)</td>       <td><span class="stat-badge text-rebel">{{ get_stat('F1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('F1', 'rebel', 'cum') }}</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div style="text-align: right; color: #45a29e; font-size: 0.75rem; margin-top: -1rem; margin-bottom: 3rem;">
+            :: SYSTEM_LAST_SYNC: <span style="color: #66fcf1;">{{ last_updated }}</span>
+        </div>
+
+        <h2>: : CORE METRICS</h2>
+        <div class="metrics-grid">
+            <div class="metric-card"><span class="metric-title">xG (Expected Goals)</span><span class="metric-desc">Quality of chances created vs conceded.</span></div>
+            <div class="metric-card"><span class="metric-title">Poisson Distribution</span><span class="metric-desc">Statistical probability of scoring X goals.</span></div>
+            <div class="metric-card"><span class="metric-title">ELO Ratings</span><span class="metric-desc">Relative team strength over long history.</span></div>
+            <div class="metric-card"><span class="metric-title">Form Momentum</span><span class="metric-desc">Last 5 games weighted by opponent strength.</span></div>
+        </div>
+
+        <h2 style="margin-top: 4rem;">: : CONCLUSION</h2>
+        <p>
+            No model can predict the future with 100% certainty. The ball is round, and luck plays a part. 
+            However, by maintaining these three distinct perspectives—<strong>Consensus, Safety, and Value</strong>—we 
+            provide a triangulation of the truth. 
+        </p>
+
+    </div>
+
+    <footer class="cyber-footer">
+        kickoff<span>.ai</span> 2025 | Powered by Passion | Data by Football-data.co.uk | Odds by The-Odds-API
+    </footer>
+
+</body>
+</html>
