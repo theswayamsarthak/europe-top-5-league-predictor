@@ -10,7 +10,9 @@ app = Flask(__name__)
 manager = ModelManager()
 
 # --- CONFIGURATION ---
-ADMIN_PASSWORD = "swayam007" 
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+if not ADMIN_PASSWORD:
+    print("WARNING: ADMIN_PASSWORD not set in Render Environment Variables")
 
 # Map Codes to Readable Names
 LEAGUE_MAP = {
@@ -71,7 +73,6 @@ def calculate_live_stats():
             valid_games = 0
             for game in game_list:
                 res_str = game['result']
-                # parse result string "(H)" etc
                 if "(H)" in res_str: actual = "HOME"
                 elif "(A)" in res_str: actual = "AWAY"
                 else: actual = "DRAW"
@@ -170,18 +171,12 @@ def refresh_global():
 
 @app.route('/the-ai')
 def the_ai():
-    # Calculate stats for all leagues (includes L10 logic)
     live_stats = calculate_live_stats()
-    
-    # Get timestamp
     last_update_time = get_last_update_time()
-    
-    # FIX: Dynamic Matchday
-    # Checks Premier League history length to estimate the game week.
+
     try:
         e0_data = manager.get_dashboard_data('E0')
         games_played = len(e0_data.get('history', []))
-        # Assuming ~10 games per week, +1 buffer
         current_matchday = math.ceil(games_played / 10) + 1
     except:
         current_matchday = 1
@@ -195,3 +190,4 @@ def the_ai():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
