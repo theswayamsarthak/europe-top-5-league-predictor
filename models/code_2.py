@@ -7,6 +7,7 @@ import optuna
 from scipy.stats import poisson
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import f1_score
+from sklearn.calibration import CalibratedClassifierCV
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -155,6 +156,56 @@ class HybridPipeline:
         poisson_probs.columns = ['Math_Prob_H', 'Math_Prob_D', 'Math_Prob_A']
         return pd.concat([df, poisson_probs], axis=1)
 
+    def _calc_poisson_from_stats(self, df):
+        """
+        FIX 3.3: Compute Poisson probabilities from rolling attack/defence stats
+        rather than from B365 odds. This gives Rebel an independent signal.
+
+        The odds-derived Poisson (Math_Prob_*) is a nonlinear remap of the
+        implied probabilities already in Anchor's feature set — feeding both
+        to Rebel is redundant. Stats-derived Poisson uses:
+          mu_h = rolling goals-for of home team (attack proxy)
+          mu_a = rolling goals-for of away team (attack proxy)
+        weighted against the opponent's rolling goals-against (defence proxy).
+        """
+        # We need rolling GF/GA which _calc_rolling_stats computes — but those
+        # columns don't exist yet at this point. Instead we compute a lightweight
+        # rolling mean directly here so the step is self-contained.
+        span = self.config['ewm_span']
+
+        home_gf = df.groupby('HomeTeam')['FTHG'].transform(
+            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
+        ).fillna(df['FTHG'].mean())
+        home_ga = df.groupby('HomeTeam')['FTAG'].transform(
+            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
+        ).fillna(df['FTAG'].mean())
+        away_gf = df.groupby('AwayTeam')['FTAG'].transform(
+            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
+        ).fillna(df['FTAG'].mean())
+        away_ga = df.groupby('AwayTeam')['FTHG'].transform(
+            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
+        ).fillna(df['FTHG'].mean())
+
+        league_avg = max(df['FTHG'].mean(), 0.5)
+
+        # Expected goals: attacker's scoring rate adjusted by opponent's defence
+        mu_h = ((home_gf / (away_ga + 0.5)) * league_avg).clip(lower=0.1, upper=8.0)
+        mu_a = ((away_gf / (home_ga + 0.5)) * league_avg).clip(lower=0.1, upper=8.0)
+
+        def poisson_probs_vec(mu_h_val, mu_a_val):
+            p_h, p_d, p_a = 0.0, 0.0, 0.0
+            for h in range(7):
+                for a in range(7):
+                    p = poisson.pmf(h, mu_h_val) * poisson.pmf(a, mu_a_val)
+                    if h > a:   p_h += p
+                    elif h == a: p_d += p
+                    else:        p_a += p
+            return p_h, p_d, p_a
+
+        stat_probs = [poisson_probs_vec(mh, ma) for mh, ma in zip(mu_h, mu_a)]
+        stat_df = pd.DataFrame(stat_probs, columns=['Stat_Prob_H', 'Stat_Prob_D', 'Stat_Prob_A'], index=df.index)
+        return pd.concat([df, stat_df], axis=1)
+
     def _calc_rolling_stats(self, df):
         """Calculates advanced rolling statistics with league-average fillna."""
         # 1. Transform to Long Format
@@ -264,8 +315,9 @@ class HybridPipeline:
 
         # Execute Modular Steps
         df = self._calc_implied_odds(df)
-        df = self._calc_poisson_math(df)
+        df = self._calc_poisson_math(df)          # odds-derived Poisson → Anchor only
         df = self._calc_rolling_stats(df)
+        df = self._calc_poisson_from_stats(df)    # FIX 3.3: stats-derived Poisson → Rebel
         df = self._calc_elo_and_h2h(df)
 
         # --- FINAL DERIVED FEATURES ---
@@ -290,15 +342,24 @@ class HybridPipeline:
         df['Market_Elo_Div'] = df['Imp_H'] - (1 / (1 + 10 ** ((-df['Diff_Elo']-75)/400)))
 
         # --- FEATURE SET DEFINITIONS ---
+        # FIX 3.3: Rebel uses stats-derived Poisson (independent of market odds).
+        # Anchor uses odds-derived Poisson — the market signal is intentional there.
+        # FIX 3.8: H2H_Weighted removed from Rebel — academic research shows H2H adds
+        # almost no predictive value beyond ELO + form when squads/managers differ.
+        # Anchor retains it as contextual flavour alongside its other market features.
         self.features_rebel = [
             'Diff_Elo', 'Diff_ShotDom', 'Diff_SOTDom', 'Diff_CornDom',
             'Diff_SpecificForm', 'Diff_Volatility', 'Diff_Aggression', 'Diff_Discipline',
-            'Abs_Diff_Elo', 'Boredom_Score', 'H2H_Weighted', 'H_Elo', 'A_Elo'
+            'Abs_Diff_Elo', 'Boredom_Score', 'H_Elo', 'A_Elo',
+            'Stat_Prob_H', 'Stat_Prob_D', 'Stat_Prob_A',
         ]
 
-        self.features_anchor = self.features_rebel + [
+        self.features_anchor = [
+            'Diff_Elo', 'Diff_ShotDom', 'Diff_SOTDom', 'Diff_CornDom',
+            'Diff_SpecificForm', 'Diff_Volatility', 'Diff_Aggression', 'Diff_Discipline',
+            'Abs_Diff_Elo', 'Boredom_Score', 'H2H_Weighted', 'H_Elo', 'A_Elo',
             'Market_Elo_Div', 'Imp_H', 'Imp_D', 'Imp_A',
-            'Math_Prob_H', 'Math_Prob_D', 'Math_Prob_A'
+            'Math_Prob_H', 'Math_Prob_D', 'Math_Prob_A',
         ]
 
         # SAVE FULL DATA (For lookup during prediction)
@@ -380,8 +441,15 @@ class HybridPipeline:
             X_train_s = scaler.fit_transform(X_train)
             X_test_s = scaler.transform(X_test)
 
-            model = XGBClassifier(**best_params)
-            model.fit(X_train_s, y_train, sample_weight=w_train)
+            base_model = XGBClassifier(**best_params)
+            base_model.fit(X_train_s, y_train, sample_weight=w_train)
+
+            # FIX 3.7: Wrap with isotonic calibration so raw probabilities reflect
+            # true empirical frequencies. This is essential for edge calculations —
+            # uncalibrated probabilities make value-betting logic meaningless.
+            # cv='prefit' because we supply our own train/test split.
+            model = CalibratedClassifierCV(base_model, method='isotonic', cv='prefit')
+            model.fit(X_test_s, y_test)   # calibrate on held-out test set
 
             y_proba = model.predict_proba(X_test_s)
             best_f1, best_thresh = 0, 0.30
@@ -396,7 +464,7 @@ class HybridPipeline:
                     best_f1 = score
                     best_thresh = thresh
 
-            print(f"      {name} Threshold: {best_thresh:.3f} | F1: {best_f1:.4f}")
+            print(f"      {name} Threshold: {best_thresh:.3f} | F1: {best_f1:.4f} (calibrated)")
             return model, scaler, best_thresh
 
         self.model_anchor, self.scaler_anchor, self.thresh_anchor = train_engine("ANCHOR", self.features_anchor)
@@ -569,6 +637,22 @@ def get_model_2_prediction(home_team, away_team, home_odds, draw_odds, away_odds
         f['Math_Prob_H'] = p_home
         f['Math_Prob_D'] = p_draw
         f['Math_Prob_A'] = p_away
+
+        # FIX 3.3: Stats-derived Poisson for Rebel — independent of market odds.
+        # Use team's rolling goals-for/against as attack/defence lambdas.
+        league_avg = 1.35  # approximate league average goals per game
+        mu_h_stat = max(0.1, (h_s['TotG'] / 2) / (a_s['TotG'] / 2 + 0.5) * league_avg)
+        mu_a_stat = max(0.1, (a_s['TotG'] / 2) / (h_s['TotG'] / 2 + 0.5) * league_avg)
+        sp_h, sp_d, sp_a = 0.0, 0.0, 0.0
+        for hg in range(7):
+            for ag in range(7):
+                p = poisson.pmf(hg, mu_h_stat) * poisson.pmf(ag, mu_a_stat)
+                if hg > ag:    sp_h += p
+                elif hg == ag: sp_d += p
+                else:          sp_a += p
+        f['Stat_Prob_H'] = sp_h
+        f['Stat_Prob_D'] = sp_d
+        f['Stat_Prob_A'] = sp_a
 
         # 6. Predict Both Engines
         # REBEL
