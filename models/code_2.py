@@ -109,7 +109,9 @@ class HybridPipeline:
                     for c in req_cols:
                         if c not in df.columns: df[c] = np.nan
                     frames.append(df[req_cols + ['Season_ID']])
-            except: continue
+            except Exception as _e:
+                print(f'Skipping row due to error: {_e}')
+                continue
 
         if not frames:
             print(f"❌ No data found for {self.league_code}")
@@ -399,6 +401,14 @@ class HybridPipeline:
 
         self.model_anchor, self.scaler_anchor, self.thresh_anchor = train_engine("ANCHOR", self.features_anchor)
         self.model_rebel, self.scaler_rebel, self.thresh_rebel = train_engine("REBEL", self.features_rebel)
+
+        # FIX 2.2: Build and store final ELO state ONCE after training.
+        # Prediction must read from this snapshot — NOT replay history each call.
+        elo_snap = EloTracker(k_factor=self.config['elo_k'], home_adv=self.config['elo_home_adv'])
+        for _, row in self.data.sort_values('Date').iterrows():
+            elo_snap.update(row['HomeTeam'], row['AwayTeam'], row['FTR'], abs(row['FTHG'] - row['FTAG']))
+        self._elo_snapshot = elo_snap
+        print(f"[{self.league_code}] ELO snapshot stored ({len(elo_snap.ratings)} teams).")
     
     def get_history(self, n=10):
         # Extracts last n games and calculates Anchor/Rebel for them
@@ -500,10 +510,15 @@ def get_model_2_prediction(home_team, away_team, home_odds, draw_odds, away_odds
         a_s = get_team_stats(away_team)
         if not h_s or not a_s: return None
 
-        # 2. Update Elo
-        elo = EloTracker(k_factor=ai.config['elo_k'], home_adv=ai.config['elo_home_adv'])
-        for _, row in ai.data.sort_values('Date').iterrows():
-            elo.update(row['HomeTeam'], row['AwayTeam'], row['FTR'], abs(row['FTHG']-row['FTAG']))
+        # 2. Read ELO from stored snapshot — never replay history per-call (FIX 2.2)
+        elo = getattr(ai, '_elo_snapshot', None)
+        if elo is None:
+            # Fallback: build snapshot and cache it (only happens if train_models
+            # was called before this fix was deployed)
+            elo = EloTracker(k_factor=ai.config['elo_k'], home_adv=ai.config['elo_home_adv'])
+            for _, row in ai.data.sort_values('Date').iterrows():
+                elo.update(row['HomeTeam'], row['AwayTeam'], row['FTR'], abs(row['FTHG']-row['FTAG']))
+            ai._elo_snapshot = elo
         h_elo = elo.get_rating(home_team)
         a_elo = elo.get_rating(away_team)
 
