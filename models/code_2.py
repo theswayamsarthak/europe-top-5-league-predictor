@@ -1,3 +1,5 @@
+import logging
+log = logging.getLogger(__name__)
 import pandas as pd
 import numpy as np
 import requests
@@ -20,6 +22,13 @@ try:
 except ImportError:
     XG_AVAILABLE = False
     print("Anchor/Rebel: xg_engine not found — running without xG features")
+
+try:
+    import injuries_engine
+    INJURIES_AVAILABLE = True
+except ImportError:
+    INJURIES_AVAILABLE = False
+    print("Anchor/Rebel: injuries_engine not found — running without injury features")
 
 
 # =============================================================================
@@ -338,14 +347,29 @@ class HybridPipeline:
             if col not in df.columns:
                 df[col] = 0.0
 
+        # FIX 3.5: Zero-fill injury/lineup features at training time.
+        # Historical match data has no injury/lineup info — these features
+        # are only populated at live prediction time via injuries_engine.
+        # Using 0.0 / 1.0 (neutral) means training treats all historical
+        # games as fully-fit full-strength, which is the correct baseline.
+        for col in ['Injury_Penalty_H', 'Injury_Penalty_A']:
+            df[col] = 0.0    # no penalty = everyone available
+        for col in ['Lineup_Str_H', 'Lineup_Str_A']:
+            df[col] = 1.0    # full strength = baseline
+
         # --- FEATURE SET DEFINITIONS ---
         # Rebel: pure performance — no market odds, includes independent Poisson + xG
+        # FIX 3.5: Injury_Penalty and Lineup_Str added as pre-match adjustment features.
+        # These are zero-filled during training (historical data has no lineup info)
+        # and populated at prediction time from injuries_engine.
         self.features_rebel = [
             'Diff_Elo','Diff_ShotDom','Diff_SOTDom','Diff_CornDom',
             'Diff_SpecificForm','Diff_Volatility','Diff_Aggression','Diff_Discipline',
             'Abs_Diff_Elo','Boredom_Score','H_Elo','A_Elo',
             'Diff_xg_diff','Diff_xg_ratio','H_xg_against_ema','A_xg_against_ema',
             'Stats_Prob_H','Stats_Prob_D','Stats_Prob_A',
+            'Injury_Penalty_H','Injury_Penalty_A',   # 3.5: weighted missing players
+            'Lineup_Str_H','Lineup_Str_A',            # 3.5: confirmed XI strength
         ]
 
         # Anchor: adds market signals on top of Rebel
@@ -610,6 +634,25 @@ def get_model_2_prediction(home_team, away_team, home_odds, draw_odds, away_odds
                 'xg_against_ema': 1.35,
             }
 
+        # 5b. FIX 3.5: Injury + lineup features from API-Football
+        # Fetched fresh per prediction — cached for 3 hours inside injuries_engine
+        if INJURIES_AVAILABLE:
+            try:
+                prematch = injuries_engine.get_prematch_features(
+                    home_team, away_team, league_code
+                )
+            except Exception as _e:
+                log.warning(f"injuries_engine failed: {_e}")
+                prematch = {
+                    'Injury_Penalty_H': 0.0, 'Injury_Penalty_A': 0.0,
+                    'Lineup_Str_H': 1.0,     'Lineup_Str_A': 1.0,
+                }
+        else:
+            prematch = {
+                'Injury_Penalty_H': 0.0, 'Injury_Penalty_A': 0.0,
+                'Lineup_Str_H': 1.0,     'Lineup_Str_A': 1.0,
+            }
+
         # 6. Assemble feature vector
         f = {}
         f['Diff_Elo']          = h_elo - a_elo
@@ -636,6 +679,12 @@ def get_model_2_prediction(home_team, away_team, home_odds, draw_odds, away_odds
         f['Diff_xg_ratio']     = h_xg['xg_ratio_ema'] - a_xg['xg_ratio_ema']
         f['H_xg_against_ema']  = h_xg['xg_against_ema']
         f['A_xg_against_ema']  = a_xg['xg_against_ema']
+        # FIX 3.5: Injury + lineup adjustment features
+        f['Injury_Penalty_H'] = prematch['Injury_Penalty_H']
+        f['Injury_Penalty_A'] = prematch['Injury_Penalty_A']
+        f['Lineup_Str_H']     = prematch['Lineup_Str_H']
+        f['Lineup_Str_A']     = prematch['Lineup_Str_A']
+
         # Anchor-only market features
         f['Market_Elo_Div']    = (1/home_odds) - (1/(1 + 10**((-f['Diff_Elo']-75)/400)))
         f['Imp_H']             = 1 / home_odds
