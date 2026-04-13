@@ -140,16 +140,20 @@
             </p>
             <table class="acc-table">
                 <thead>
-                    <tr><th>League</th><th>Last 10 Matches (Acc)</th><th>Cumulative Accuracy</th></tr>
+                    <tr><th>League</th><th>Cumulative Acc</th><th>CV Log-Loss ↓</th><th>CV Log-Loss σ</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>Premier League (UK)</td> <td><span class="stat-badge text-trinity">{{ get_stat('E0', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('E0', 'trinity', 'cum') }}</td></tr>
-                    <tr><td>La Liga (ESP)</td>       <td><span class="stat-badge text-trinity">{{ get_stat('SP1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('SP1', 'trinity', 'cum') }}</td></tr>
-                    <tr><td>Bundesliga (GER)</td>    <td><span class="stat-badge text-trinity">{{ get_stat('D1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('D1', 'trinity', 'cum') }}</td></tr>
-                    <tr><td>Serie A (ITA)</td>       <td><span class="stat-badge text-trinity">{{ get_stat('I1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('I1', 'trinity', 'cum') }}</td></tr>
-                    <tr><td>Ligue 1 (FRA)</td>       <td><span class="stat-badge text-trinity">{{ get_stat('F1', 'trinity', 'l10') }}</span></td> <td>{{ get_stat('F1', 'trinity', 'cum') }}</td></tr>
+                    {% for lc, lname in [('E0','Premier League'),('SP1','La Liga'),('D1','Bundesliga'),('I1','Serie A'),('F1','Ligue 1')] %}
+                    <tr>
+                        <td>{{ lname }}</td>
+                        <td>{{ get_stat(lc, 'trinity', 'cum') }}</td>
+                        <td><span class="stat-badge text-trinity">{{ model_metrics.get(lc, {}).get('trinity', {}).get('log_loss', '—') }}</span></td>
+                        <td style="color:#555">{{ model_metrics.get(lc, {}).get('trinity', {}).get('log_loss_std', '—') }}</td>
+                    </tr>
+                    {% endfor %}
                 </tbody>
             </table>
+            <p style="font-size:0.75rem;color:#555;margin-top:0.5rem">↓ Lower log-loss = better probability calibration. Random baseline ≈ 1.10. Good model &lt; 0.95.</p>
         </div>
 
         <div class="model-section border-anchor">
@@ -160,16 +164,20 @@
             </p>
             <table class="acc-table">
                 <thead>
-                    <tr><th>League</th><th>Last 10 Matches (Acc)</th><th>Cumulative Accuracy</th></tr>
+                    <tr><th>League</th><th>Cumulative Acc</th><th>OOS Macro-F1 ↑</th><th>OOS Log-Loss ↓</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>Premier League (UK)</td> <td><span class="stat-badge text-anchor">{{ get_stat('E0', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('E0', 'anchor', 'cum') }}</td></tr>
-                    <tr><td>La Liga (ESP)</td>       <td><span class="stat-badge text-anchor">{{ get_stat('SP1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('SP1', 'anchor', 'cum') }}</td></tr>
-                    <tr><td>Bundesliga (GER)</td>    <td><span class="stat-badge text-anchor">{{ get_stat('D1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('D1', 'anchor', 'cum') }}</td></tr>
-                    <tr><td>Serie A (ITA)</td>       <td><span class="stat-badge text-anchor">{{ get_stat('I1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('I1', 'anchor', 'cum') }}</td></tr>
-                    <tr><td>Ligue 1 (FRA)</td>       <td><span class="stat-badge text-anchor">{{ get_stat('F1', 'anchor', 'l10') }}</span></td> <td>{{ get_stat('F1', 'anchor', 'cum') }}</td></tr>
+                    {% for lc, lname in [('E0','Premier League'),('SP1','La Liga'),('D1','Bundesliga'),('I1','Serie A'),('F1','Ligue 1')] %}
+                    <tr>
+                        <td>{{ lname }}</td>
+                        <td>{{ get_stat(lc, 'anchor', 'cum') }}</td>
+                        <td><span class="stat-badge text-anchor">{{ model_metrics.get(lc, {}).get('anchor', {}).get('f1', '—') }}</span></td>
+                        <td style="color:#aaa">{{ model_metrics.get(lc, {}).get('anchor', {}).get('log_loss', '—') }}</td>
+                    </tr>
+                    {% endfor %}
                 </tbody>
             </table>
+            <p style="font-size:0.75rem;color:#555;margin-top:0.5rem">OOS = out-of-sample holdout (last 15% of seasons). ↑ F1 > 0.38 beats a naive always-HOME baseline.</p>
         </div>
 
         <div class="model-section border-rebel">
@@ -180,16 +188,20 @@
             </p>
             <table class="acc-table">
                 <thead>
-                    <tr><th>League</th><th>Last 10 Matches (Acc)</th><th>Cumulative Accuracy</th></tr>
+                    <tr><th>League</th><th>Cumulative Acc</th><th>OOS Macro-F1 ↑</th><th>OOS Log-Loss ↓</th></tr>
                 </thead>
                 <tbody>
-                    <tr><td>Premier League (UK)</td> <td><span class="stat-badge text-rebel">{{ get_stat('E0', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('E0', 'rebel', 'cum') }}</td></tr>
-                    <tr><td>La Liga (ESP)</td>       <td><span class="stat-badge text-rebel">{{ get_stat('SP1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('SP1', 'rebel', 'cum') }}</td></tr>
-                    <tr><td>Bundesliga (GER)</td>    <td><span class="stat-badge text-rebel">{{ get_stat('D1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('D1', 'rebel', 'cum') }}</td></tr>
-                    <tr><td>Serie A (ITA)</td>       <td><span class="stat-badge text-rebel">{{ get_stat('I1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('I1', 'rebel', 'cum') }}</td></tr>
-                    <tr><td>Ligue 1 (FRA)</td>       <td><span class="stat-badge text-rebel">{{ get_stat('F1', 'rebel', 'l10') }}</span></td> <td>{{ get_stat('F1', 'rebel', 'cum') }}</td></tr>
+                    {% for lc, lname in [('E0','Premier League'),('SP1','La Liga'),('D1','Bundesliga'),('I1','Serie A'),('F1','Ligue 1')] %}
+                    <tr>
+                        <td>{{ lname }}</td>
+                        <td>{{ get_stat(lc, 'rebel', 'cum') }}</td>
+                        <td><span class="stat-badge text-rebel">{{ model_metrics.get(lc, {}).get('rebel', {}).get('f1', '—') }}</span></td>
+                        <td style="color:#aaa">{{ model_metrics.get(lc, {}).get('rebel', {}).get('log_loss', '—') }}</td>
+                    </tr>
+                    {% endfor %}
                 </tbody>
             </table>
+            <p style="font-size:0.75rem;color:#555;margin-top:0.5rem">OOS = out-of-sample holdout (last 15% of seasons). ↑ F1 > 0.38 beats a naive always-HOME baseline.</p>
         </div>
 
         <div style="text-align: right; color: #45a29e; font-size: 0.75rem; margin-top: -1rem; margin-bottom: 3rem;">
