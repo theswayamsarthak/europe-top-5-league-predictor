@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-API_KEY  = os.environ.get("APIFOOTBALL_KEY", "aeceae3875fccfb8bdc5d0b5e689c2b6")
+API_KEY  = os.environ.get("APIFOOTBALL_KEY")
 BASE_URL = "https://v3.football.api-sports.io"
 HEADERS  = {"x-apisports-key": API_KEY}
 
