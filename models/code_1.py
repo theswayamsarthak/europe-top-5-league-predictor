@@ -6,6 +6,9 @@ import xgboost as xgb
 from sklearn.ensemble import VotingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import log_loss, brier_score_loss
+from sklearn.preprocessing import label_binarize
 
 # ============================================
 # GOD MODE BACKEND (DYNAMIC LEAGUE VERSION)
@@ -104,25 +107,38 @@ class GodModeEngine:
         self.curr_elo_dict = curr_elo 
 
         # 2. EMA (EXPONENTIAL MOVING AVERAGE) FORM
-        def create_stream(df):
-            h = df[['date', 'home_team', 'home_goals', 'home_shots_on_target', 'home_corners']].copy()
-            h.columns = ['date', 'team', 'goals', 'sot', 'corners']
-            a = df[['date', 'away_team', 'away_goals', 'away_shots_on_target', 'away_corners']].copy()
-            a.columns = ['date', 'team', 'goals', 'sot', 'corners']
-            return pd.concat([h, a]).sort_values(['team', 'date'])
-
-        stream = create_stream(df)
+        # FIX 3.6: Track SEPARATE home/away EMA streams per team.
+        # A team like Liverpool has very different stats at home vs away —
+        # blending them into one stream produces misleading differentials.
         cols = ['goals', 'sot', 'corners']
-        # Calculate EMA shifted by 1 (so we only use PAST data for current row)
-        stream_ema = stream.groupby('team')[cols].transform(lambda x: x.shift(1).ewm(span=5, adjust=False).mean())
-        stream = pd.concat([stream, stream_ema.add_prefix('ema_')], axis=1)
 
-        # Merge EMA back to main dataframe
-        df = df.merge(stream[['date', 'team', 'ema_goals', 'ema_sot', 'ema_corners']], 
-                      left_on=['date', 'home_team'], right_on=['date', 'team'], how='left').rename(columns={'ema_goals':'h_ema_goals', 'ema_sot':'h_ema_sot', 'ema_corners':'h_ema_corn'}).drop(columns=['team'])
-        
-        df = df.merge(stream[['date', 'team', 'ema_goals', 'ema_sot', 'ema_corners']], 
-                      left_on=['date', 'away_team'], right_on=['date', 'team'], how='left').rename(columns={'ema_goals':'a_ema_goals', 'ema_sot':'a_ema_sot', 'ema_corners':'a_ema_corn'}).drop(columns=['team'])
+        def build_venue_stream(df, venue):
+            """Build EMA stream for a specific venue (home or away)."""
+            if venue == 'home':
+                s = df[['date', 'home_team', 'home_goals', 'home_shots_on_target', 'home_corners']].copy()
+            else:
+                s = df[['date', 'away_team', 'away_goals', 'away_shots_on_target', 'away_corners']].copy()
+            s.columns = ['date', 'team', 'goals', 'sot', 'corners']
+            s = s.sort_values(['team', 'date'])
+            ema = s.groupby('team')[cols].transform(lambda x: x.shift(1).ewm(span=5, adjust=False).mean())
+            s = pd.concat([s, ema.add_prefix('ema_')], axis=1)
+            return s
+
+        home_stream = build_venue_stream(df, 'home')
+        away_stream = build_venue_stream(df, 'away')
+
+        # For each upcoming game:
+        #   home team stats  → use their HOME-venue EMA (how they perform at home)
+        #   away team stats  → use their AWAY-venue EMA (how they perform away)
+        df = df.merge(
+            home_stream[['date', 'team', 'ema_goals', 'ema_sot', 'ema_corners']],
+            left_on=['date', 'home_team'], right_on=['date', 'team'], how='left'
+        ).rename(columns={'ema_goals': 'h_ema_goals', 'ema_sot': 'h_ema_sot', 'ema_corners': 'h_ema_corn'}).drop(columns=['team'])
+
+        df = df.merge(
+            away_stream[['date', 'team', 'ema_goals', 'ema_sot', 'ema_corners']],
+            left_on=['date', 'away_team'], right_on=['date', 'team'], how='left'
+        ).rename(columns={'ema_goals': 'a_ema_goals', 'ema_sot': 'a_ema_sot', 'ema_corners': 'a_ema_corn'}).drop(columns=['team'])
 
         # 3. FEATURE DIFFERENTIALS
         df['Elo_Diff'] = df['home_elo'] - df['away_elo']
@@ -143,28 +159,91 @@ class GodModeEngine:
         df = self.master_df
         if df.empty: return
 
-        X = df[self.features]
-        y = df['target']
-        
+        X = df[self.features].values
+        y = df['target'].values
+
         self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
-        
+
         # Weighted by recency (more weight to recent games)
         weights = np.exp(np.linspace(0, 4, len(X)))
-        
-        # TRINITY ENSEMBLE
-        lr = LogisticRegression(C=0.05, max_iter=1000)
-        rf = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42)
-        # FIX 3.1: use softprob not softmax — VotingClassifier(voting='soft') calls
-        # predict_proba(), so XGBoost must output calibrated probabilities, not hard labels.
-        xgb_mod = xgb.XGBClassifier(n_estimators=150, max_depth=3, learning_rate=0.05,
-                                    objective='multi:softprob', num_class=3, random_state=42, eval_metric='mlogloss')
-        
+
+        # FIX 3.1: softprob not softmax — VotingClassifier(voting='soft') calls predict_proba()
+        lr      = LogisticRegression(C=0.05, max_iter=1000)
+        rf      = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42)
+        xgb_mod = xgb.XGBClassifier(
+            n_estimators=150, max_depth=3, learning_rate=0.05,
+            objective='multi:softprob', num_class=3, random_state=42, eval_metric='mlogloss'
+        )
+
         self.model = VotingClassifier(
             estimators=[('lr', lr), ('rf', rf), ('xgb', xgb_mod)],
             voting='soft', weights=[1, 1, 3]
         )
+
+        # FIX 3.2: Time-series cross-validation with honest out-of-sample metrics.
+        # Accuracy alone is misleading (always-HOME hits ~45% without being useful).
+        # Brier Score measures calibration quality; log-loss penalises confident errors.
+        tscv = TimeSeriesSplit(n_splits=5)
+        fold_brier, fold_logloss, fold_acc = [], [], []
+        classes = [0, 1, 2]  # 0=Away, 1=Draw, 2=Home
+
+        print(f"  [{self.league_code}] Trinity CV ({len(X)} samples, 5 folds)...")
+        for fold, (train_idx, val_idx) in enumerate(tscv.split(X), 1):
+            if len(val_idx) < 10:
+                continue  # skip folds too small to be meaningful
+            X_tr, X_val = X[train_idx], X[val_idx]
+            y_tr, y_val = y[train_idx], y[val_idx]
+            w_tr = weights[train_idx]
+
+            scaler_fold = StandardScaler()
+            X_tr_s  = scaler_fold.fit_transform(X_tr)
+            X_val_s = scaler_fold.transform(X_val)
+
+            # Build fresh estimators per fold to avoid data leakage
+            lr_f   = LogisticRegression(C=0.05, max_iter=1000)
+            rf_f   = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42)
+            xgb_f  = xgb.XGBClassifier(
+                n_estimators=150, max_depth=3, learning_rate=0.05,
+                objective='multi:softprob', num_class=3, random_state=42, eval_metric='mlogloss'
+            )
+            vc_f = VotingClassifier(
+                estimators=[('lr', lr_f), ('rf', rf_f), ('xgb', xgb_f)],
+                voting='soft', weights=[1, 1, 3]
+            )
+            vc_f.fit(X_tr_s, y_tr, sample_weight=w_tr)
+
+            proba = vc_f.predict_proba(X_val_s)  # shape (n, 3) — already ordered [Away, Draw, Home]
+            preds = np.argmax(proba, axis=1)
+
+            # Brier Score: average over all classes (multi-class extension)
+            y_bin = label_binarize(y_val, classes=classes)
+            brier = np.mean([brier_score_loss(y_bin[:, c], proba[:, c]) for c in range(3)])
+            ll    = log_loss(y_val, proba, labels=classes)
+            acc   = np.mean(preds == y_val)
+
+            fold_brier.append(brier)
+            fold_logloss.append(ll)
+            fold_acc.append(acc)
+            print(f"    Fold {fold}: acc={acc:.3f} | brier={brier:.4f} | log-loss={ll:.4f}")
+
+        if fold_brier:
+            print(f"  [{self.league_code}] Trinity CV Summary → "
+                  f"acc={np.mean(fold_acc):.3f}±{np.std(fold_acc):.3f} | "
+                  f"brier={np.mean(fold_brier):.4f}±{np.std(fold_brier):.4f} | "
+                  f"log-loss={np.mean(fold_logloss):.4f}±{np.std(fold_logloss):.4f}")
+            # Store for /the-ai display
+            self.cv_metrics = {
+                'accuracy':  round(float(np.mean(fold_acc)),   4),
+                'brier':     round(float(np.mean(fold_brier)), 4),
+                'log_loss':  round(float(np.mean(fold_logloss)), 4),
+            }
+        else:
+            self.cv_metrics = {}
+
+        # Final fit on ALL data with recency weights
+        X_scaled = self.scaler.fit_transform(X)
         self.model.fit(X_scaled, y, sample_weight=weights)
+        print(f"  [{self.league_code}] Trinity final model trained on {len(X)} samples.")
 
     def predict_match(self, h_team, a_team):
         # --- CRITICAL FIX: Safe Data Retrieval ---
