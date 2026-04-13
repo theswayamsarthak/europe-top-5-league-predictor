@@ -48,6 +48,13 @@
         .val-text { font-weight: bold; }
         .t-val { color: #9b59b6; } .a-val { color: #3498db; } .r-val { color: #e74c3c; }
 
+        /* Verdict badges */
+        .verdict-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; letter-spacing: 0.5px; }
+        .value-home  { background: rgba(102,252,241,0.15); color: #66fcf1; border: 1px solid #66fcf1; }
+        .value-away  { background: rgba(230,126,34,0.15);  color: #e67e22; border: 1px solid #e67e22; }
+        .value-draw  { background: rgba(241,196,15,0.15);  color: #f1c40f; border: 1px solid #f1c40f; }
+        .neutral     { color: #555; font-size: 0.7rem; }
+
         /* --- FOOTER --- */
         .cyber-footer {
             text-align: center; padding: 30px 0; color: #6c757d; font-size: 0.75rem;
@@ -87,12 +94,13 @@
                 <table class="table table-dark table-hover mb-0">
                     <thead>
                         <tr>
-                            <th style="width: 10%">Date</th>
-                            <th style="width: 25%">Fixture</th>
-                            <th style="width: 14%">Odds</th>
-                            <th style="width: 17%">TRINITY</th>
-                            <th style="width: 17%">ANCHOR</th>
-                            <th style="width: 17%">REBEL</th>
+                            <th style="width: 8%">Date</th>
+                            <th style="width: 20%">Fixture</th>
+                            <th style="width: 10%">Odds</th>
+                            <th style="width: 14%">TRINITY</th>
+                            <th style="width: 14%">ANCHOR</th>
+                            <th style="width: 14%">REBEL</th>
+                            <th style="width: 20%">CALL</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -104,9 +112,12 @@
                                 <div style="font-size:0.8em; color:#888">vs {{ g.away_team }}</div>
                             </td>
                             <td style="font-size:0.8rem">{{ g.odds_h }} | {{ g.odds_d }} | {{ g.odds_a }}</td>
-                            <td><div class="col-trinity">H: <span class="val-text t-val">{{ g.trinity_h }}</span><br>A: <span class="val-text t-val">{{ g.trinity_a }}</span></div></td>
-                            <td><div class="col-anchor">H: <span class="val-text a-val">{{ g.anchor_h }}</span><br>A: <span class="val-text a-val">{{ g.anchor_a }}</span></div></td>
-                            <td><div class="col-rebel">H: <span class="val-text r-val">{{ g.rebel_h }}</span><br>A: <span class="val-text r-val">{{ g.rebel_a }}</span></div></td>
+                            <td><div class="col-trinity">H: <span class="val-text t-val">{{ g.trinity_h }}</span><br>A: <span class="val-text t-val">{{ g.trinity_a }}</span><br><span style="font-size:0.75em;color:#9b59b6;font-weight:bold;">{{ g.pred_trinity }}</span></div></td>
+                            <td><div class="col-anchor">H: <span class="val-text a-val">{{ g.anchor_h }}</span><br>A: <span class="val-text a-val">{{ g.anchor_a }}</span><br><span style="font-size:0.75em;color:#3498db;font-weight:bold;">{{ g.pred_anchor }}</span></div></td>
+                            <td><div class="col-rebel">H: <span class="val-text r-val">{{ g.rebel_h }}</span><br>A: <span class="val-text r-val">{{ g.rebel_a }}</span><br><span style="font-size:0.75em;color:#e74c3c;font-weight:bold;">{{ g.pred_rebel }}</span></div></td>
+                            <td>
+                                <span class="verdict-badge {{ g.verdict_class }}">{{ g.verdict }}</span>
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
