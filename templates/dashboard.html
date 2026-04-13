@@ -101,6 +101,7 @@
                             <th style="width: 14%">ANCHOR</th>
                             <th style="width: 14%">REBEL</th>
                             <th style="width: 20%">CALL</th>
+                            <th style="width: 10%">FITNESS</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -117,6 +118,25 @@
                             <td><div class="col-rebel">H: <span class="val-text r-val">{{ g.rebel_h }}</span><br>A: <span class="val-text r-val">{{ g.rebel_a }}</span><br><span style="font-size:0.75em;color:#e74c3c;font-weight:bold;">{{ g.pred_rebel }}</span></div></td>
                             <td>
                                 <span class="verdict-badge {{ g.verdict_class }}">{{ g.verdict }}</span>
+                            </td>
+                            <td style="font-size:0.75rem; line-height:1.6;">
+                                {% if g.injury_h > 0 or g.injury_a > 0 %}
+                                    {% if g.injury_h > 0 %}
+                                        <span style="color:#e74c3c;" title="Home injury penalty">⚑ H:{{ g.injury_h }}</span><br>
+                                    {% endif %}
+                                    {% if g.injury_a > 0 %}
+                                        <span style="color:#e67e22;" title="Away injury penalty">⚑ A:{{ g.injury_a }}</span><br>
+                                    {% endif %}
+                                {% endif %}
+                                {% if g.lineup_h < 1.0 %}
+                                    <span style="color:#f1c40f;" title="Home lineup weakened">▼ H:{{ "%.2f"|format(g.lineup_h) }}</span><br>
+                                {% endif %}
+                                {% if g.lineup_a < 1.0 %}
+                                    <span style="color:#f1c40f;" title="Away lineup weakened">▼ A:{{ "%.2f"|format(g.lineup_a) }}</span><br>
+                                {% endif %}
+                                {% if g.injury_h == 0 and g.injury_a == 0 and g.lineup_h >= 1.0 and g.lineup_a >= 1.0 %}
+                                    <span style="color:#555">—</span>
+                                {% endif %}
                             </td>
                         </tr>
                         {% endfor %}
