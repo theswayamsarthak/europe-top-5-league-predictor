@@ -6,6 +6,7 @@ import time
 import re
 import numpy as np
 from datetime import datetime
+from supabase import create_client, Client
 
 # Add models directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'models'))
@@ -17,35 +18,47 @@ except ImportError:
     import code_2
 
 # --- CONFIG ---
-API_KEY = 'ef34aceb66c1cd96711aa1ca8fdde0bc' 
+API_KEY = os.environ.get("ODDS_API_KEY")
+if not API_KEY:
+    print("WARNING: ODDS_API_KEY not set in environment variables")
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("WARNING: SUPABASE_URL or SUPABASE_KEY not set — persistence disabled")
+    supabase = None
+else:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("Supabase connected.")
 
 LEAGUE_CONFIG = {
-    'E0':  {'sport': 'soccer_epl',           'region': 'uk', 'name': 'Premier League'},
-    'SP1': {'sport': 'soccer_spain_la_liga', 'region': 'eu', 'name': 'La Liga'},
+    'E0':  {'sport': 'soccer_epl',               'region': 'uk', 'name': 'Premier League'},
+    'SP1': {'sport': 'soccer_spain_la_liga',      'region': 'eu', 'name': 'La Liga'},
     'D1':  {'sport': 'soccer_germany_bundesliga', 'region': 'eu', 'name': 'Bundesliga'},
-    'I1':  {'sport': 'soccer_italy_serie_a', 'region': 'eu', 'name': 'Serie A'},
-    'F1':  {'sport': 'soccer_france_ligue_one', 'region': 'eu', 'name': 'Ligue 1'}
+    'I1':  {'sport': 'soccer_italy_serie_a',      'region': 'eu', 'name': 'Serie A'},
+    'F1':  {'sport': 'soccer_france_ligue_one',   'region': 'eu', 'name': 'Ligue 1'}
 }
 
 MARKETS = 'h2h'
-STATS_FILE = 'model_stats.json'
-ARCHIVE_FILE = 'predictions_archive.json' # <--- NEW: The Permanent Ledger
-CACHE_DURATION = 10 * 24 * 60 * 60  # 10 Days
+CACHE_DURATION = 3 * 60 * 60  # 3 hours
+
+# In-memory cache (lives within one server session)
+_memory_cache = {}
 
 # --- MASTER TEAM MAPPING ---
 TEAM_MAP = {
-    # --- GERMANY (Bundesliga) ---
+    # GERMANY
     'vfl wolfsburg': 'Wolfsburg',
     'hamburger sv': 'Hamburg',
     'fsv mainz 05': 'Mainz',
     'mainz 05': 'Mainz',
-    'rb leipzig': 'Leipzig',
     'koln': 'FC Koln',
     '1. fc koln': 'FC Koln',
     'fc koln': 'FC Koln',
-    'borussia monchengladbach': 'M\'gladbach',
-    'monchengladbach': 'M\'gladbach',
-    'm\'gladbach': 'M\'gladbach',
+    'borussia monchengladbach': "M'gladbach",
+    'monchengladbach': "M'gladbach",
+    "m'gladbach": "M'gladbach",
     'bayer leverkusen': 'Leverkusen',
     'borussia dortmund': 'Dortmund',
     'heidenheim': 'Heidenheim',
@@ -71,8 +84,7 @@ TEAM_MAP = {
     'darmstadt': 'Darmstadt',
     'freiburg': 'Freiburg',
     'hamburg': 'Hamburg',
-
-    # --- SPAIN (La Liga) ---
+    # SPAIN
     'deportivo alaves': 'Alaves',
     'alavés': 'Alaves',
     'alaves': 'Alaves',
@@ -81,12 +93,12 @@ TEAM_MAP = {
     'rayo vallecano': 'Vallecano',
     'vallecano': 'Vallecano',
     'athletic bilbao': 'Ath Bilbao',
-    'atletico madrid': 'Ath Madrid', 
-    'ca osasuna': 'Osasuna', 
-    'elche cf': 'Elche', 
-    'real betis': 'Betis', 
+    'atletico madrid': 'Ath Madrid',
+    'ca osasuna': 'Osasuna',
+    'elche cf': 'Elche',
+    'real betis': 'Betis',
     'real sociedad': 'Sociedad',
-    'celta vigo': 'Celta', 
+    'celta vigo': 'Celta',
     'rcd mallorca': 'Mallorca',
     'girona': 'Girona',
     'valencia': 'Valencia',
@@ -101,12 +113,11 @@ TEAM_MAP = {
     'getafe': 'Getafe',
     'levante': 'Levante',
     'oviedo': 'Oviedo',
-
-    # --- FRANCE (Ligue 1) ---
-    'paris saint germain': 'Paris SG', 
-    'paris sg': 'Paris SG', 
+    # FRANCE
+    'paris saint germain': 'Paris SG',
+    'paris sg': 'Paris SG',
     'psg': 'Paris SG',
-    'saint-etienne': 'St Etienne', 
+    'saint-etienne': 'St Etienne',
     'st etienne': 'St Etienne',
     'as monaco': 'Monaco',
     'olympique marseille': 'Marseille',
@@ -128,8 +139,8 @@ TEAM_MAP = {
     'lorient': 'Lorient',
     'auxerre': 'Auxerre',
     'angers': 'Angers',
-
-    # --- ITALY (Serie A) ---
+    'paris fc': 'Paris FC',
+    # ITALY
     'inter milan': 'Inter',
     'ac milan': 'Milan',
     'as roma': 'Roma',
@@ -138,6 +149,7 @@ TEAM_MAP = {
     'lazio': 'Lazio',
     'napoli': 'Napoli',
     'atalanta': 'Atalanta',
+    'atalanta bc': 'Atalanta',
     'fiorentina': 'Fiorentina',
     'torino': 'Torino',
     'udinese': 'Udinese',
@@ -153,15 +165,14 @@ TEAM_MAP = {
     'parma': 'Parma',
     'como': 'Como',
     'venezia': 'Venezia',
-    'atalanta bc': 'Atalanta',
-    'atalanta': 'Atalanta',
-    
-    # --- ENGLAND ---
+    'cremonese': 'Cremonese',
+    'pisa': 'Pisa',
+    # ENGLAND
     'manchester united': 'Man United',
     'manchester city': 'Man City',
     'tottenham hotspur': 'Tottenham',
     'newcastle united': 'Newcastle',
-    'nottingham forest': 'Nott\'m Forest',
+    "nottingham forest": "Nott'm Forest",
     'wolverhampton wanderers': 'Wolves',
     'leicester city': 'Leicester',
     'leeds united': 'Leeds',
@@ -169,321 +180,393 @@ TEAM_MAP = {
     'brighton and hove albion': 'Brighton',
     'sheffield united': 'Sheffield United',
     'luton town': 'Luton',
-    'ipswich town': 'Ipswich'
+    'ipswich town': 'Ipswich',
+    'sunderland': 'Sunderland',
+    'burnley': 'Burnley',
+    'aston villa': 'Aston Villa',
+    'chelsea': 'Chelsea',
+    'arsenal': 'Arsenal',
+    'liverpool': 'Liverpool',
+    'everton': 'Everton',
+    'crystal palace': 'Crystal Palace',
+    'brentford': 'Brentford',
+    'fulham': 'Fulham',
+    'bournemouth': 'Bournemouth',
 }
+
 
 class ModelManager:
     def __init__(self):
-        # Load the Archive into memory when Manager starts
         self.archive = self._load_archive()
 
+    # -------------------------------------------------------------------------
+    # NAME NORMALISATION
+    # -------------------------------------------------------------------------
     def _normalize_name(self, name):
-        if not isinstance(name, str): return ""
-        clean_name = name.lower().strip()
-        clean_name = re.sub(r'^(1\.?\s?fc|fc|sc|sv|rc|rcd)\s+', '', clean_name)
-        clean_name = re.sub(r'\s+(fc|cf|sc)$', '', clean_name)
-        replacements = {
-            'á': 'a', 'à': 'a', 'ä': 'a', 'â': 'a',
-            'é': 'e', 'è': 'e', 'ë': 'e', 'ê': 'e',
-            'í': 'i', 'ì': 'i', 'ï': 'i',
-            'ó': 'o', 'ò': 'o', 'ö': 'o', 'ô': 'o',
-            'ú': 'u', 'ù': 'u', 'ü': 'u',
-            'ñ': 'n', 'ç': 'c', 'ß': 'ss'
-        }
-        for char, rep in replacements.items():
-            clean_name = clean_name.replace(char, rep)
-        clean_name = clean_name.strip()
-        final_name = TEAM_MAP.get(clean_name, TEAM_MAP.get(name.lower(), name))
-        return final_name
+        if not isinstance(name, str):
+            return ""
+        clean = name.lower().strip()
+        clean = re.sub(r'^(1\.?\s?fc|fc|sc|sv|rc|rcd)\s+', '', clean)
+        clean = re.sub(r'\s+(fc|cf|sc)$', '', clean)
+        for char, rep in {
+            'á':'a','à':'a','ä':'a','â':'a',
+            'é':'e','è':'e','ë':'e','ê':'e',
+            'í':'i','ì':'i','ï':'i',
+            'ó':'o','ò':'o','ö':'o','ô':'o',
+            'ú':'u','ù':'u','ü':'u',
+            'ñ':'n','ç':'c','ß':'ss'
+        }.items():
+            clean = clean.replace(char, rep)
+        clean = clean.strip()
+        return TEAM_MAP.get(clean, TEAM_MAP.get(name.lower(), name))
 
-    # --- NEW ARCHIVE METHODS ---
+    # -------------------------------------------------------------------------
+    # SUPABASE — PREDICTIONS ARCHIVE
+    # -------------------------------------------------------------------------
     def _load_archive(self):
-        if os.path.exists(ARCHIVE_FILE):
-            try:
-                with open(ARCHIVE_FILE, 'r') as f:
-                    return json.load(f)
-            except: return {}
-        return {}
+        if not supabase:
+            return {}
+        try:
+            result = supabase.table('predictions_archive').select('*').execute()
+            archive = {}
+            for row in result.data:
+                archive[row['game_id']] = {
+                    'pred_trinity': row.get('pred_trinity'),
+                    'pred_anchor':  row.get('pred_anchor'),
+                    'pred_rebel':   row.get('pred_rebel'),
+                }
+            print(f"Archive loaded: {len(archive)} entries.")
+            return archive
+        except Exception as e:
+            print(f"Archive load error: {e}")
+            return {}
 
     def _save_to_archive(self, game_id, predictions):
-        """
-        Saves predictions. INTELLIGENT MERGE:
-        If entry exists, it MERGES new keys (like anchor/rebel) 
-        but does NOT overwrite existing ones (like trinity).
-        """
+        """Merge-write: never overwrites a valid existing prediction."""
+        if not supabase:
+            return
+
+        existing = self.archive.get(game_id, {})
+        merged = dict(existing)
         updated = False
-        
-        # 1. Create entry if it doesn't exist
-        if game_id not in self.archive:
-            self.archive[game_id] = {}
-        
-        existing = self.archive[game_id]
-        
-        # 2. Merge new predictions into existing entry
+
         for key, value in predictions.items():
-            # Only write if value is valid and (key missing OR current is N/A)
-            if value != "N/A" and (key not in existing or existing[key] == "N/A"):
-                existing[key] = value
-                updated = True
-        
-        self.archive[game_id] = existing
+            if value and value != 'N/A':
+                if not existing.get(key) or existing[key] == 'N/A':
+                    merged[key] = value
+                    updated = True
 
-        # 3. Write to disk only if data changed
-        if updated:
-            with open(ARCHIVE_FILE, 'w') as f:
-                json.dump(self.archive, f, indent=4)
+        if not updated:
+            return
 
+        self.archive[game_id] = merged
+        try:
+            supabase.table('predictions_archive').upsert({
+                'game_id':      game_id,
+                'pred_trinity': merged.get('pred_trinity'),
+                'pred_anchor':  merged.get('pred_anchor'),
+                'pred_rebel':   merged.get('pred_rebel'),
+                'updated_at':   datetime.utcnow().isoformat(),
+            }).execute()
+        except Exception as e:
+            print(f"Archive save error ({game_id}): {e}")
+
+    # -------------------------------------------------------------------------
+    # SUPABASE — MODEL ACCURACY STATS
+    # -------------------------------------------------------------------------
+    def _load_stats(self):
+        if not supabase:
+            return self._empty_stats()
+        try:
+            result = supabase.table('model_stats').select('*').execute()
+            stats = self._empty_stats()
+            for row in result.data:
+                league = row['league']
+                model  = row['model']
+                if league in stats:
+                    stats[league][model] = {
+                        'correct': row.get('correct', 0),
+                        'total':   row.get('total', 0),
+                    }
+            return stats
+        except Exception as e:
+            print(f"Stats load error: {e}")
+            return self._empty_stats()
+
+    def _save_stat(self, league, model, correct_delta, total_delta):
+        if not supabase:
+            return
+        stat_id = f"{league}_{model}"
+        try:
+            res = supabase.table('model_stats').select('*').eq('stat_id', stat_id).execute()
+            if res.data:
+                row = res.data[0]
+                supabase.table('model_stats').update({
+                    'correct':    row['correct'] + correct_delta,
+                    'total':      row['total']   + total_delta,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }).eq('stat_id', stat_id).execute()
+            else:
+                supabase.table('model_stats').insert({
+                    'stat_id':    stat_id,
+                    'league':     league,
+                    'model':      model,
+                    'correct':    correct_delta,
+                    'total':      total_delta,
+                    'updated_at': datetime.utcnow().isoformat(),
+                }).execute()
+        except Exception as e:
+            print(f"Stat save error ({stat_id}): {e}")
+
+    def _empty_stats(self):
+        return {
+            code: {
+                'trinity': {'correct': 0, 'total': 0},
+                'anchor':  {'correct': 0, 'total': 0},
+                'rebel':   {'correct': 0, 'total': 0},
+            }
+            for code in LEAGUE_CONFIG
+        }
+
+    # -------------------------------------------------------------------------
+    # SUPABASE — PROCESSED RESULTS (prevents double-counting)
+    # -------------------------------------------------------------------------
+    def _is_processed(self, game_id):
+        if not supabase:
+            return False
+        try:
+            res = supabase.table('processed_results').select('game_id').eq('game_id', game_id).execute()
+            return len(res.data) > 0
+        except Exception as e:
+            print(f"Processed check error: {e}")
+            return False
+
+    def _mark_processed(self, game_id):
+        if not supabase:
+            return
+        try:
+            supabase.table('processed_results').upsert({
+                'game_id':      game_id,
+                'processed_at': datetime.utcnow().isoformat(),
+            }).execute()
+        except Exception as e:
+            print(f"Mark processed error ({game_id}): {e}")
+
+    # -------------------------------------------------------------------------
+    # IN-MEMORY CACHE (3-hour TTL)
+    # -------------------------------------------------------------------------
+    def _get_cache(self, league_code):
+        cached = _memory_cache.get(league_code)
+        if cached and (time.time() - cached['timestamp']) < CACHE_DURATION:
+            print(f"Serving {league_code} from memory cache.")
+            return cached['data']
+        return None
+
+    def _set_cache(self, league_code, data):
+        _memory_cache[league_code] = {'timestamp': time.time(), 'data': data}
+
+    def clear_cache(self):
+        _memory_cache.clear()
+        print("Memory cache cleared.")
+
+    # -------------------------------------------------------------------------
+    # MAIN ENTRY POINT
+    # -------------------------------------------------------------------------
     def get_dashboard_data(self, league_code='E0'):
-        cache_file = f"dashboard_cache_{league_code}.json"
+        cached = self._get_cache(league_code)
+        if cached:
+            return cached
 
-        # 1. CHECK CACHE
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, 'r') as f:
-                    cached = json.load(f)
-                    if (time.time() - cached['timestamp']) < CACHE_DURATION:
-                        print(f"Manager: Loading {league_code} from CACHE.")
-                        return cached['data']
-            except Exception as e:
-                print(f"Cache Read Error ({league_code}): {e}")
-
-        # 2. RUN ANALYSIS
-        print(f"Manager: Cache expired for {league_code}. Running Analysis...")
+        print(f"Cache miss for {league_code}. Generating fresh data...")
         data = self._generate_fresh_data(league_code)
-        
-        # 3. SAVE CACHE
         if data:
-            try:
-                with open(cache_file, 'w') as f:
-                    json.dump({'timestamp': time.time(), 'data': data}, f)
-            except Exception as e:
-                print(f"Cache Write Error ({league_code}): {e}")
-        
+            self._set_cache(league_code, data)
         return data
 
+    # -------------------------------------------------------------------------
+    # CORE DATA GENERATION
+    # -------------------------------------------------------------------------
     def _generate_fresh_data(self, league_code):
-        if league_code not in LEAGUE_CONFIG: return {'live': [], 'history': []}
+        if league_code not in LEAGUE_CONFIG:
+            return {'live': [], 'history': []}
 
-        config = LEAGUE_CONFIG[league_code]
-        # Fetching raw odds
+        config   = LEAGUE_CONFIG[league_code]
         raw_odds = self._fetch_odds_api(config['sport'], config['region'])
         live_games = []
 
         if raw_odds:
-            print(f"Processing {len(raw_odds)} live games for {league_code}...")
-            
-            # Optional limit
-            # raw_odds = raw_odds[:10]
-
+            print(f"Processing {len(raw_odds)} games for {league_code}...")
             for game in raw_odds:
                 home = self._normalize_name(game['home_team'])
                 away = self._normalize_name(game['away_team'])
-                
-                h_odd, d_odd, a_odd = 0, 0, 0
+
+                h_odd = d_odd = a_odd = 0
                 if game['bookmakers']:
-                    bk = next((b for b in game['bookmakers'] if b['key'] == 'bet365'), game['bookmakers'][0])
+                    bk = next(
+                        (b for b in game['bookmakers'] if b['key'] == 'bet365'),
+                        game['bookmakers'][0]
+                    )
                     for out in bk['markets'][0]['outcomes']:
-                        if out['name'] == game['home_team']: h_odd = out['price']
+                        if out['name'] == game['home_team']:   h_odd = out['price']
                         elif out['name'] == game['away_team']: a_odd = out['price']
-                        elif out['name'] == 'Draw': d_odd = out['price']
-                
-                if h_odd == 0: continue
+                        elif out['name'] == 'Draw':            d_odd = out['price']
+
+                if h_odd == 0:
+                    continue
 
                 item = {
                     'date': game['commence_time'].split('T')[0],
                     'home_team': home, 'away_team': away,
                     'odds_h': h_odd, 'odds_d': d_odd, 'odds_a': a_odd,
                     'trinity_h': '--', 'trinity_a': '--',
-                    'anchor_h': '--', 'anchor_a': '--',
-                    'rebel_h': '--', 'rebel_a': '--',
-                    'verdict': "No Value", 'verdict_class': "neutral"
+                    'anchor_h':  '--', 'anchor_a':  '--',
+                    'rebel_h':   '--', 'rebel_a':   '--',
+                    'pred_trinity': 'N/A',
+                    'pred_anchor':  'N/A',
+                    'pred_rebel':   'N/A',
+                    'verdict': 'No Value', 'verdict_class': 'neutral',
                 }
 
-                # --- GENERATE & ARCHIVE PREDICTIONS ---
                 try:
                     p1 = code_1.get_model_1_prediction(home, away, league_code=league_code)
                     p2 = code_2.get_model_2_prediction(home, away, h_odd, d_odd, a_odd, league_code=league_code)
-
-                    # Prepare Archive Data
                     archive_data = {}
 
-                    # 1. TRINITY PREDICTION
                     if p1:
                         item['trinity_h'] = f"{p1['home_prob']:.1%}"
                         item['trinity_a'] = f"{p1['away_prob']:.1%}"
-                        
                         probs = [p1['away_prob'], p1['draw_prob'], p1['home_prob']]
-                        winner_idx = np.argmax(probs)
-                        archive_data['pred_trinity'] = "HOME" if winner_idx == 2 else ("AWAY" if winner_idx == 0 else "DRAW")
+                        idx = int(np.argmax(probs))
+                        call = 'HOME' if idx == 2 else ('AWAY' if idx == 0 else 'DRAW')
+                        item['pred_trinity'] = call
+                        archive_data['pred_trinity'] = call
 
-                    # 2. ANCHOR & REBEL PREDICTIONS
                     if p2:
                         anc, reb = p2['anchor'], p2['rebel']
                         item['anchor_h'] = f"{anc['home']:.1%}"
                         item['anchor_a'] = f"{anc['away']:.1%}"
-                        item['rebel_h'] = f"{reb['home']:.1%}"
-                        item['rebel_a'] = f"{reb['away']:.1%}"
+                        item['rebel_h']  = f"{reb['home']:.1%}"
+                        item['rebel_a']  = f"{reb['away']:.1%}"
 
-                        # Helper to convert probabilities to "HOME", "AWAY", "DRAW"
-                        def get_winner(probs_dict):
-                            # probs_dict is {'home': 0.5, 'away': 0.3, 'draw': 0.2}
-                            h, a, d = probs_dict['home'], probs_dict['away'], probs_dict['draw']
-                            if h > a and h > d: return "HOME"
-                            if a > h and a > d: return "AWAY"
-                            return "DRAW"
+                        def get_winner(d):
+                            if d['home'] > d['away'] and d['home'] > d['draw']: return 'HOME'
+                            if d['away'] > d['home'] and d['away'] > d['draw']: return 'AWAY'
+                            return 'DRAW'
 
-                        archive_data['pred_anchor'] = get_winner(anc)
-                        archive_data['pred_rebel'] = get_winner(reb)
+                        item['pred_anchor'] = get_winner(anc)
+                        item['pred_rebel']  = get_winner(reb)
+                        archive_data['pred_anchor'] = item['pred_anchor']
+                        archive_data['pred_rebel']  = item['pred_rebel']
 
-                        # Logic for Verdict (Value Betting)
-                        imp_h, imp_a = 1/h_odd, 1/a_odd
+                        imp_h  = 1 / h_odd
+                        imp_a  = 1 / a_odd
                         edge_h = reb['home'] - imp_h
                         edge_a = reb['away'] - imp_a
-                        
-                        if edge_h > 0.05:
-                            item['verdict'] = f"HOME VALUE (+{edge_h*100:.1f}%)"
-                            item['verdict_class'] = "value-home"
-                        elif edge_a > 0.05:
-                            item['verdict'] = f"AWAY VALUE (+{edge_a*100:.1f}%)"
-                            item['verdict_class'] = "value-away"
-                        elif reb['draw'] > 0.29:
-                            item['verdict'] = "DRAW WATCH"
-                            item['verdict_class'] = "value-draw"
 
-                    # --- SAVE ALL THREE TO ARCHIVE (MERGE MODE) ---
+                        if edge_h > 0.05:
+                            item['verdict']       = f"HOME VALUE (+{edge_h*100:.1f}%)"
+                            item['verdict_class'] = 'value-home'
+                        elif edge_a > 0.05:
+                            item['verdict']       = f"AWAY VALUE (+{edge_a*100:.1f}%)"
+                            item['verdict_class'] = 'value-away'
+                        elif reb['draw'] > 0.29:
+                            item['verdict']       = 'DRAW WATCH'
+                            item['verdict_class'] = 'value-draw'
+
                     unique_id = f"{league_code}-{home}-{away}"
                     self._save_to_archive(unique_id, archive_data)
 
                 except Exception as e:
-                    print(f"⚠️ Prediction Error for {home} vs {away}: {e}")
-                    item['verdict'] = "Data Error"
+                    print(f"Prediction error ({home} vs {away}): {e}")
+                    item['verdict'] = 'Data Error'
 
                 live_games.append(item)
 
-        # 3. History & Stats
         history = self._get_full_history(league_code)
         self._update_accuracy_stats(history, league_code)
 
-        return {
-            'live': live_games, 
-            'history': history, 
-            'league_name': config['name'] 
-        }
+        return {'live': live_games, 'history': history, 'league_name': config['name']}
 
+    # -------------------------------------------------------------------------
+    # ODDS API
+    # -------------------------------------------------------------------------
     def _fetch_odds_api(self, sport, region):
-        url = f'https://api.the-odds-api.com/v4/sports/{sport}/odds'
+        url    = f'https://api.the-odds-api.com/v4/sports/{sport}/odds'
         params = {'api_key': API_KEY, 'regions': region, 'markets': MARKETS, 'oddsFormat': 'decimal'}
         try:
-            resp = requests.get(url, params=params)
-            return resp.json() if resp.status_code == 200 else []
-        except: return []
-
-    def _get_full_history(self, league_code):
-        try:
-            raw_history = code_2.get_history_data(league_code=league_code) 
-            clean_history = []
-            
-            for h in raw_history:
-                home = self._normalize_name(h['home_team'])
-                away = self._normalize_name(h['away_team'])
-                
-                # Unique ID for Lookup
-                unique_id = f"{league_code}-{home}-{away}"
-                
-                # Defaults
-                trinity_res = "N/A"
-                anchor_res = "N/A"
-                rebel_res = "N/A"
-                
-                # --- STRATEGY: STRICT ARCHIVE LOOKUP ONLY ---
-                
-                # 1. Check Archive (The Honest Way)
-                if unique_id in self.archive:
-                    saved = self.archive[unique_id]
-                    trinity_res = saved.get('pred_trinity', "N/A")
-                    anchor_res = saved.get('pred_anchor', "N/A")
-                    rebel_res = saved.get('pred_rebel', "N/A")
-
-                # 2. NO FALLBACKS
-                # If it's not in the archive, it stays "N/A".
-                # This ensures your history log is PURE. No fake calculations.
-
-                clean_history.append({
-                    'date': h['date'], 
-                    'fixture': h['fixture'], 
-                    'result': h['result'],
-                    'pred_trinity': trinity_res, 
-                    'pred_anchor': anchor_res, 
-                    'pred_rebel': rebel_res
-                })
-            return clean_history
-        except Exception as e: 
-            print(f"History Error ({league_code}): {e}")
+            resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+            print(f"Odds API {resp.status_code}: {resp.text[:200]}")
+            return []
+        except Exception as e:
+            print(f"Odds API error: {e}")
             return []
 
+    # -------------------------------------------------------------------------
+    # HISTORY
+    # -------------------------------------------------------------------------
+    def _get_full_history(self, league_code):
+        try:
+            raw = code_2.get_history_data(league_code=league_code)
+            clean = []
+            for h in raw:
+                home = self._normalize_name(h['home_team'])
+                away = self._normalize_name(h['away_team'])
+                uid  = f"{league_code}-{home}-{away}"
+                saved = self.archive.get(uid, {})
+                clean.append({
+                    'date':         h['date'],
+                    'fixture':      h['fixture'],
+                    'result':       h['result'],
+                    'pred_trinity': saved.get('pred_trinity') or 'N/A',
+                    'pred_anchor':  saved.get('pred_anchor')  or 'N/A',
+                    'pred_rebel':   saved.get('pred_rebel')   or 'N/A',
+                })
+            return clean
+        except Exception as e:
+            print(f"History error ({league_code}): {e}")
+            return []
+
+    # -------------------------------------------------------------------------
+    # ACCURACY STATS
+    # -------------------------------------------------------------------------
     def _update_accuracy_stats(self, history_games, league_code):
-        if os.path.exists(STATS_FILE):
-            try:
-                with open(STATS_FILE, 'r') as f: stats = json.load(f)
-            except: stats = self._get_empty_stats()
-        else: stats = self._get_empty_stats()
-
-        if league_code not in stats:
-            stats[league_code] = {
-                "trinity": {"correct":0,"total":0},
-                "anchor": {"correct":0,"total":0},
-                "rebel": {"correct":0,"total":0}
-            }
-
-        updates_made = False
-        
         for game in history_games:
-            # Create a unique ID specifically for the stats processing
-            # Using date here ensures we don't process the same match twice
             game_id = f"{league_code}-{game['date']}-{game['fixture']}"
-            
-            if game_id in stats['processed_ids']: continue 
-            
-            # Only process if we have a valid result
-            if '?' in game['result']: continue
-
-            updates_made = True
-            stats['processed_ids'].append(game_id)
-            
+            if '?' in game['result']:
+                continue
+            if self._is_processed(game_id):
+                continue
             try:
-                res_char = game['result'].split('(')[1].replace(')', '') 
-                actual = "HOME" if res_char == 'H' else ("AWAY" if res_char == 'A' else "DRAW")
-            except: continue
-
+                res_char = game['result'].split('(')[1].replace(')', '')
+                actual = 'HOME' if res_char == 'H' else ('AWAY' if res_char == 'A' else 'DRAW')
+            except Exception:
+                continue
             for model in ['trinity', 'anchor', 'rebel']:
-                pred_key = f'pred_{model}'
-                prediction = game.get(pred_key, "N/A")
-                
-                # ONLY COUNT VALID PREDICTIONS
-                if prediction != "N/A":
-                    stats[league_code][model]['total'] += 1
-                    if prediction == actual: 
-                        stats[league_code][model]['correct'] += 1
-        
-        if updates_made:
-            stats['last_updated'] = datetime.now().strftime("%d %b %Y, %H:%M")
-            # Keep the processed IDs list from growing infinitely
-            if len(stats['processed_ids']) > 1000: 
-                stats['processed_ids'] = stats['processed_ids'][-1000:]
-            with open(STATS_FILE, 'w') as f: json.dump(stats, f)
-        
-        return stats
+                pred = game.get(f'pred_{model}', 'N/A')
+                if pred == 'N/A':
+                    continue
+                self._save_stat(league_code, model, 1 if pred == actual else 0, 1)
+            self._mark_processed(game_id)
 
-    def _get_empty_stats(self):
-        return {"last_updated": "Initializing...", "processed_ids": []}
-
-    def clear_cache(self):
-        files = [f for f in os.listdir('.') if f.startswith('dashboard_cache_') and f.endswith('.json')]
-        for f in files:
-            try: os.remove(f)
-            except: pass
-
+    # -------------------------------------------------------------------------
+    # PUBLIC HELPERS (used by app.py)
+    # -------------------------------------------------------------------------
     def get_stats(self):
-        if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, 'r') as f: return json.load(f)
-        return self._get_empty_stats()
+        return self._load_stats()
+
+    def get_last_updated(self):
+        if not supabase:
+            return 'Unknown'
+        try:
+            res = supabase.table('model_stats').select('updated_at').order(
+                'updated_at', desc=True
+            ).limit(1).execute()
+            if res.data:
+                raw = res.data[0]['updated_at']
+                dt  = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+                return dt.strftime('%d %b %Y @ %H:%M')
+        except Exception as e:
+            print(f"Last updated error: {e}")
+        return 'Unknown'
