@@ -9,6 +9,14 @@ import master_feed
 app = Flask(__name__)
 manager = ModelManager()
 
+# Pre-warm all league engines in a background thread so the first real
+# request doesn't have to wait 60-90 seconds for training to complete.
+def _background_warmup():
+    manager.warm_up()
+
+_warmup_thread = threading.Thread(target=_background_warmup, daemon=True)
+_warmup_thread.start()
+
 # --- CONFIGURATION ---
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 if not ADMIN_PASSWORD:
@@ -65,6 +73,30 @@ def home():
 
     if league_code not in LEAGUE_MAP:
         league_code = 'E0'
+
+    # FIX 2.4: Show warmup page while engines are still loading
+    if not manager._is_warm:
+        return """
+        <html>
+        <head>
+            <meta http-equiv="refresh" content="10">
+            <style>
+                body {{ background:#0b0c10; color:#66fcf1; font-family:monospace;
+                        display:flex; align-items:center; justify-content:center;
+                        height:100vh; margin:0; text-align:center; }}
+                .dot {{ animation: blink 1.2s infinite; }}
+                @keyframes blink {{ 0%,100%{{opacity:1}} 50%{{opacity:0.2}} }}
+            </style>
+        </head>
+        <body>
+            <div>
+                <h2>:: SYSTEM WARMING UP <span class="dot">...</span> ::</h2>
+                <p style="color:#888">AI models are loading. This page will refresh automatically every 10 seconds.</p>
+                <p style="font-size:0.8rem; color:#555">First boot takes 60-90 seconds. Subsequent loads use the cache.</p>
+            </div>
+        </body>
+        </html>
+        """
 
     try:
         data = manager.get_dashboard_data(league_code=league_code)
@@ -159,13 +191,19 @@ def the_ai():
     live_stats       = calculate_live_stats()
     last_update_time = manager.get_last_updated()
 
-    # Calculate current matchday from E0 history length
-    try:
-        e0_data        = manager.get_dashboard_data('E0')
-        games_played   = len(e0_data.get('history', []))
-        current_matchday = math.ceil(games_played / 10) + 1
-    except Exception:
-        current_matchday = 1
+    # FIX 1.4: Calculate matchday from whichever league data is already warm,
+    # not hardcoded to E0 — avoids gating all five leagues on E0 game count.
+    current_matchday = 1
+    for lc, cfg in {'E0': 10, 'SP1': 10, 'D1': 9, 'I1': 10, 'F1': 10}.items():
+        try:
+            if _memory_cache.get(lc):  # only use already-cached leagues
+                from model_manager import _memory_cache
+                cached_data = _memory_cache[lc]['data']
+                games_played = len(cached_data.get('history', []))
+                games_per_round = cfg
+                current_matchday = max(current_matchday, math.ceil(games_played / games_per_round) + 1)
+        except Exception:
+            pass
 
     return render_template(
         'the_ai.html',
