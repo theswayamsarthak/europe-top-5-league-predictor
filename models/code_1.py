@@ -49,7 +49,8 @@ class GodModeEngine:
                 cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','HS','AS','HST','AST','HC','AC']
                 df = df[[c for c in cols if c in df.columns]]
                 dfs.append(df)
-            except: pass
+            except Exception as e:
+                print(f"[{self.league_code}] Failed to load season {s}: {e}")
         
         if not dfs: return False
         
@@ -154,8 +155,10 @@ class GodModeEngine:
         # TRINITY ENSEMBLE
         lr = LogisticRegression(C=0.05, max_iter=1000)
         rf = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42)
-        xgb_mod = xgb.XGBClassifier(n_estimators=150, max_depth=3, learning_rate=0.05, 
-                                    objective='multi:softmax', num_class=3, random_state=42, eval_metric='mlogloss')
+        # FIX 3.1: use softprob not softmax — VotingClassifier(voting='soft') calls
+        # predict_proba(), so XGBoost must output calibrated probabilities, not hard labels.
+        xgb_mod = xgb.XGBClassifier(n_estimators=150, max_depth=3, learning_rate=0.05,
+                                    objective='multi:softprob', num_class=3, random_state=42, eval_metric='mlogloss')
         
         self.model = VotingClassifier(
             estimators=[('lr', lr), ('rf', rf), ('xgb', xgb_mod)],
