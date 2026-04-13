@@ -272,8 +272,15 @@ class GodModeEngine:
             proba = val_xgb.predict_proba(X_val)
             fold_losses.append(log_loss(y_val, proba))
 
-        print(f"Trinity [{self.league_code}] CV log-loss: {np.mean(fold_losses):.4f} "
-              f"(±{np.std(fold_losses):.4f})")
+        mean_ll = np.mean(fold_losses)
+        std_ll  = np.std(fold_losses)
+        print(f"Trinity [{self.league_code}] CV log-loss: {mean_ll:.4f} (±{std_ll:.4f})")
+
+        # Store for /the-ai display (4.1)
+        self.cv_metrics = {
+            'log_loss': round(float(mean_ll), 4),
+            'log_loss_std': round(float(std_ll), 4),
+        }
 
         # --- Train full ensemble on all data ---
         lr  = LogisticRegression(C=0.05, max_iter=1000, random_state=42)
