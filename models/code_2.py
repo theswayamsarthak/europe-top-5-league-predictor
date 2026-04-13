@@ -454,12 +454,18 @@ class HybridPipeline:
 
             oos_ll = log_loss(y_test, y_proba)
             print(f"   {name} — thresh: {best_thresh:.2f} | F1: {best_f1:.4f} | log-loss: {oos_ll:.4f}")
-            return cal_model, scaler, best_thresh, avail_cols
+            return cal_model, scaler, best_thresh, avail_cols, round(float(best_f1), 4), round(float(oos_ll), 4)
 
-        self.model_anchor, self.scaler_anchor, self.thresh_anchor, self.features_anchor = \
-            train_engine("ANCHOR", self.features_anchor)
-        self.model_rebel,  self.scaler_rebel,  self.thresh_rebel,  self.features_rebel  = \
-            train_engine("REBEL",  self.features_rebel)
+        (self.model_anchor, self.scaler_anchor, self.thresh_anchor,
+         self.features_anchor, anchor_f1, anchor_ll) = train_engine("ANCHOR", self.features_anchor)
+        (self.model_rebel,  self.scaler_rebel,  self.thresh_rebel,
+         self.features_rebel,  rebel_f1,  rebel_ll)  = train_engine("REBEL",  self.features_rebel)
+
+        # Store training metrics for /the-ai display (4.1)
+        self.train_metrics = {
+            'anchor': {'f1': anchor_f1, 'log_loss': anchor_ll},
+            'rebel':  {'f1': rebel_f1,  'log_loss': rebel_ll},
+        }
 
     # -------------------------------------------------------------------------
     # D. HISTORY (for dashboard Recent Results table)
@@ -510,6 +516,13 @@ def get_history_data(league_code='E0'):
     if league_code not in _pipelines:
         return []
     return _pipelines[league_code].get_history(10)
+
+
+def get_model_metrics(league_code='E0'):
+    """Returns stored training metrics for Anchor and Rebel (F1 + log-loss)."""
+    if league_code not in _pipelines:
+        return {}
+    return getattr(_pipelines[league_code], 'train_metrics', {})
 
 
 def get_model_2_prediction(home_team, away_team, home_odds, draw_odds, away_odds, league_code='E0'):
