@@ -198,6 +198,24 @@ TEAM_MAP = {
 class ModelManager:
     def __init__(self):
         self.archive = self._load_archive()
+        self._is_warm = False  # True once all league engines are loaded
+
+    def warm_up(self):
+        """
+        Pre-warm all five league pipelines in the background so the first
+        real user request is not the one that triggers 60-90s of training.
+        Called from app.py in a daemon thread at startup.
+        """
+        print(":: PRE-WARM STARTED — loading all league engines ::")
+        for league_code in LEAGUE_CONFIG:
+            try:
+                print(f"  Warming {league_code}...")
+                self._generate_fresh_data(league_code)
+                print(f"  {league_code} warm.")
+            except Exception as e:
+                print(f"  Warm-up error ({league_code}): {e}")
+        self._is_warm = True
+        print(":: PRE-WARM COMPLETE ::")
 
     # -------------------------------------------------------------------------
     # NAME NORMALISATION
@@ -507,6 +525,12 @@ class ModelManager:
     # HISTORY
     # -------------------------------------------------------------------------
     def _get_full_history(self, league_code):
+        """
+        Build history list. code_2.get_history already computes anchor/rebel
+        predictions for each historical game — use those directly as fallback.
+        Trinity is only available from the Supabase archive (written at live
+        prediction time). The archive key matches _save_to_archive.
+        """
         try:
             raw = code_2.get_history_data(league_code=league_code)
             clean = []
@@ -517,11 +541,16 @@ class ModelManager:
                 saved = self.archive.get(uid, {})
                 clean.append({
                     'date':         h['date'],
+                    'home_team':    home,
+                    'away_team':    away,
                     'fixture':      h['fixture'],
                     'result':       h['result'],
+                    # Archive predictions are locked at live-prediction time.
+                    # For anchor/rebel, fall back to code_2 re-computed values
+                    # so history rows always have something to score against.
                     'pred_trinity': saved.get('pred_trinity') or 'N/A',
-                    'pred_anchor':  saved.get('pred_anchor')  or 'N/A',
-                    'pred_rebel':   saved.get('pred_rebel')   or 'N/A',
+                    'pred_anchor':  saved.get('pred_anchor')  or h.get('pred_anchor', 'N/A'),
+                    'pred_rebel':   saved.get('pred_rebel')   or h.get('pred_rebel', 'N/A'),
                 })
             return clean
         except Exception as e:
