@@ -147,7 +147,14 @@ def refresh_global():
             print(":: GLOBAL AI REFRESH STARTED (background thread) ::")
             master_feed.force_update_all()
             manager.clear_cache()
-            print(":: GLOBAL AI REFRESH COMPLETE ::")
+
+            # 4.3: Retrain all five league models after new results are in.
+            # Pipeline cache is already cleared above, so next get_dashboard_data
+            # call will re-run full data fetch + feature engineering + training.
+            # We trigger that explicitly here so users see fresh models immediately.
+            print(":: RETRAINING ALL LEAGUE MODELS ::")
+            manager.retrain_all()
+            print(":: GLOBAL AI REFRESH + RETRAIN COMPLETE ::")
         except Exception as e:
             print(f"Global Refresh Error: {e}")
         finally:
@@ -189,6 +196,7 @@ def refresh_global():
 @app.route('/the-ai')
 def the_ai():
     live_stats       = calculate_live_stats()
+    model_metrics    = manager.get_model_metrics()   # 4.1: calibration quality
     last_update_time = manager.get_last_updated()
 
     # FIX 1.4: Calculate matchday from whichever league data is already warm,
@@ -207,10 +215,11 @@ def the_ai():
 
     return render_template(
         'the_ai.html',
-        stats        = live_stats,
-        last_updated = last_update_time,
-        matchday     = current_matchday,
-        league_code  = None,       # FIX: was missing — caused silent nav active-state bug
+        stats          = live_stats,
+        model_metrics  = model_metrics,
+        last_updated   = last_update_time,
+        matchday       = current_matchday,
+        league_code    = None,
     )
 
 
