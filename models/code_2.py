@@ -6,23 +6,30 @@ import warnings
 import optuna
 from scipy.stats import poisson
 from sklearn.preprocessing import RobustScaler
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, log_loss
 from sklearn.calibration import CalibratedClassifierCV
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
 
-# Suppress warnings & Optuna logs
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+try:
+    import xg_engine
+    XG_AVAILABLE = True
+except ImportError:
+    XG_AVAILABLE = False
+    print("Anchor/Rebel: xg_engine not found — running without xG features")
+
+
 # =============================================================================
-# 1. ADVANCED ELO ENGINE (UNCHANGED)
+# 1. ELO ENGINE
 # =============================================================================
 class EloTracker:
     def __init__(self, k_factor=20, base_rating=1500, home_adv=75):
-        self.ratings = {}
-        self.k = k_factor
-        self.base = base_rating
+        self.ratings  = {}
+        self.k        = k_factor
+        self.base     = base_rating
         self.home_adv = home_adv
 
     def get_rating(self, team):
@@ -34,640 +41,610 @@ class EloTracker:
         e_home = 1 / (1 + 10 ** ((r_away - (r_home + self.home_adv)) / 400))
         e_away = 1 - e_home
 
-        if result == 'H': s_home, s_away = 1, 0
+        if result == 'H':   s_home, s_away = 1, 0
         elif result == 'A': s_home, s_away = 0, 1
-        else: s_home, s_away = 0.5, 0.5
+        else:               s_home, s_away = 0.5, 0.5
 
-        # Dynamic K based on Margin of Victory
-        if goal_diff <= 1: mult = 1.0
+        # Margin-of-victory multiplier
+        if goal_diff <= 1:   mult = 1.0
         elif goal_diff == 2: mult = 1.5
-        else: mult = (11 + goal_diff) / 8
+        else:                mult = (11 + goal_diff) / 8
 
-        current_k = self.k * mult
-        self.ratings[home] = r_home + current_k * (s_home - e_home)
-        self.ratings[away] = r_away + current_k * (s_away - e_away)
+        k = self.k * mult
+        self.ratings[home] = r_home + k * (s_home - e_home)
+        self.ratings[away] = r_away + k * (s_away - e_away)
+
 
 # =============================================================================
-# 2. IMPROVED HYBRID PIPELINE (GENERALIZED FOR ALL LEAGUES)
+# 2. HYBRID PIPELINE  (Anchor + Rebel twin-engine)
 # =============================================================================
 class HybridPipeline:
     def __init__(self, league_code='E0'):
         self.league_code = league_code
-        # Centralized Configuration
         self.config = {
-            'seasons': ['1617', '1718', '1819', '1920', '2021', '2122', '2223', '2324', '2425', '2526'],
-            # Dynamic URL insertion
-            'base_url': f"https://www.football-data.co.uk/mmz4281/{{}}/{self.league_code}.csv",
-            'elo_k': 20,
+            'seasons':    ['1617','1718','1819','1920','2021','2122','2223','2324','2425','2526'],
+            'base_url':   f"https://www.football-data.co.uk/mmz4281/{{}}/{self.league_code}.csv",
+            'elo_k':      20,
             'elo_home_adv': 75,
-            'ewm_span': 6,          # Rolling form span
-            'split_ratio': 0.85,    # Train/Test split
-            'decay_alpha': 0.90,    # Season decay weight
-            'h2h_decay': 0.85,      # Decay factor for H2H matches
-            'xgb_params': {         # Default Params
+            'ewm_span':   6,
+            'split_ratio': 0.85,
+            'decay_alpha': 0.90,
+            'xgb_params': {
                 'n_estimators': 500, 'max_depth': 4, 'learning_rate': 0.025,
                 'subsample': 0.8, 'colsample_bytree': 0.8,
-                'objective': 'multi:softprob', 'num_class': 3, 'n_jobs': -1, 'random_state': 42
+                'objective': 'multi:softprob', 'num_class': 3,
+                'n_jobs': -1, 'random_state': 42, 'verbosity': 0,
             }
         }
 
-        self.data = None
-        self.feat_data = None # Stores full data with rolling cols
+        self.data      = None
+        self.feat_data = None
         self.proc_data = None
         self.target_map = {'A': 0, 'D': 1, 'H': 2}
 
-        # Feature Sets
-        self.features_anchor = []
-        self.features_rebel = []
+        # Stored final ELO state — populated after feature_engineering
+        # Avoids replaying all history on every prediction call
+        self.final_elo = None
 
-        # Models & Scalers
-        self.model_anchor = None
-        self.model_rebel = None
+        # xG state
+        self.xg_features_df = pd.DataFrame()
+        self.xg_loaded      = False
+
+        # Feature sets (populated in feature_engineering)
+        self.features_anchor = []
+        self.features_rebel  = []
+
+        # Models & scalers
+        self.model_anchor  = None
+        self.model_rebel   = None
         self.scaler_anchor = None
-        self.scaler_rebel = None
+        self.scaler_rebel  = None
         self.thresh_anchor = 0.30
-        self.thresh_rebel = 0.30
+        self.thresh_rebel  = 0.30
 
     # -------------------------------------------------------------------------
     # A. DATA INGESTION
     # -------------------------------------------------------------------------
     def fetch_data(self):
-        print(f"📥 [{self.league_code}] Fetching raw data (including current 25/26 season)...")
-        frames = []
+        print(f"[{self.league_code}] Fetching historical data...")
+        frames  = []
         headers = {'User-Agent': 'Mozilla/5.0'}
-        req_cols = ['Date','HomeTeam','AwayTeam','FTHG','FTAG','FTR',
-                    'HS','AS','HST','AST','HC','AC','HF','AF','HY','AY','HR','AR',
-                    'B365H','B365D','B365A']
+        req_cols = [
+            'Date','HomeTeam','AwayTeam','FTHG','FTAG','FTR',
+            'HS','AS','HST','AST','HC','AC','HF','AF','HY','AY','HR','AR',
+            'B365H','B365D','B365A'
+        ]
 
         for i, season in enumerate(self.config['seasons']):
             try:
-                # Format URL with season (league_code is already in base_url)
-                r = requests.get(self.config['base_url'].format(season), headers=headers)
-                if r.status_code == 200:
-                    df = pd.read_csv(io.StringIO(r.content.decode('utf-8')), on_bad_lines='skip')
-                    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-                    df['Season_ID'] = i
-                    for c in req_cols:
-                        if c not in df.columns: df[c] = np.nan
-                    frames.append(df[req_cols + ['Season_ID']])
-            except Exception as _e:
-                print(f'Skipping row due to error: {_e}')
+                r = requests.get(self.config['base_url'].format(season), headers=headers, timeout=15)
+                if r.status_code != 200:
+                    continue
+                df = pd.read_csv(io.StringIO(r.content.decode('utf-8')), on_bad_lines='skip')
+                df['Date']      = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+                df['Season_ID'] = i
+                for c in req_cols:
+                    if c not in df.columns:
+                        df[c] = np.nan
+                frames.append(df[req_cols + ['Season_ID']])
+            except Exception as e:
+                print(f"  [{self.league_code}] Season {season} skipped: {e}")
                 continue
 
         if not frames:
-            print(f"❌ No data found for {self.league_code}")
+            print(f"[{self.league_code}] No data loaded.")
             return False
 
-        self.data = pd.concat(frames, ignore_index=True).sort_values('Date').reset_index(drop=True)
-        self.data = self.data.dropna(subset=['HomeTeam', 'AwayTeam', 'FTR'])
+        self.data = (
+            pd.concat(frames, ignore_index=True)
+            .sort_values('Date')
+            .reset_index(drop=True)
+        )
+        self.data = self.data.dropna(subset=['HomeTeam','AwayTeam','FTR'])
         self.data['Target'] = self.data['FTR'].map(self.target_map)
-        print(f"✅ [{self.league_code}] Loaded {len(self.data)} matches.")
+        print(f"[{self.league_code}] Loaded {len(self.data)} matches.")
         return True
 
     # -------------------------------------------------------------------------
-    # B. MODULAR FEATURE ENGINEERING
+    # B. FEATURE ENGINEERING
     # -------------------------------------------------------------------------
     def _calc_implied_odds(self, df):
-        """Calculates market implied probabilities."""
         df['Imp_H'] = 1 / df['B365H']
         df['Imp_D'] = 1 / df['B365D']
         df['Imp_A'] = 1 / df['B365A']
         df[['Imp_H','Imp_D','Imp_A']] = df[['Imp_H','Imp_D','Imp_A']].fillna(0.33)
         return df
 
-    def _calc_poisson_math(self, df):
-        """Calculates theoretical probabilities using Poisson distribution."""
+    def _calc_odds_poisson(self, df):
+        """Odds-derived Poisson — used only by Anchor (market-aware model)."""
         def row_poisson(row):
-            prob_h = 1/row['B365H'] if row['B365H'] > 0 else 0.33
-            prob_a = 1/row['B365A'] if row['B365A'] > 0 else 0.33
-            mu_h = max(0.1, 1.35 + (prob_h - prob_a) * 1.5)
-            mu_a = max(0.1, 1.15 + (prob_a - prob_h) * 1.0)
-
-            p_h, p_d, p_a = 0, 0, 0
+            ph = 1/row['B365H'] if row['B365H'] > 0 else 0.33
+            pa = 1/row['B365A'] if row['B365A'] > 0 else 0.33
+            mu_h = max(0.1, 1.35 + (ph - pa) * 1.5)
+            mu_a = max(0.1, 1.15 + (pa - ph) * 1.0)
+            p_h = p_d = p_a = 0.0
             for h in range(6):
                 for a in range(6):
                     p = poisson.pmf(h, mu_h) * poisson.pmf(a, mu_a)
-                    if h > a: p_h += p
-                    elif h == a: p_d += p
-                    else: p_a += p
-            return pd.Series([p_h, p_d, p_a])
-
-        poisson_probs = df.apply(row_poisson, axis=1)
-        poisson_probs.columns = ['Math_Prob_H', 'Math_Prob_D', 'Math_Prob_A']
-        return pd.concat([df, poisson_probs], axis=1)
-
-    def _calc_poisson_from_stats(self, df):
-        """
-        FIX 3.3: Compute Poisson probabilities from rolling attack/defence stats
-        rather than from B365 odds. This gives Rebel an independent signal.
-
-        The odds-derived Poisson (Math_Prob_*) is a nonlinear remap of the
-        implied probabilities already in Anchor's feature set — feeding both
-        to Rebel is redundant. Stats-derived Poisson uses:
-          mu_h = rolling goals-for of home team (attack proxy)
-          mu_a = rolling goals-for of away team (attack proxy)
-        weighted against the opponent's rolling goals-against (defence proxy).
-        """
-        # We need rolling GF/GA which _calc_rolling_stats computes — but those
-        # columns don't exist yet at this point. Instead we compute a lightweight
-        # rolling mean directly here so the step is self-contained.
-        span = self.config['ewm_span']
-
-        home_gf = df.groupby('HomeTeam')['FTHG'].transform(
-            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
-        ).fillna(df['FTHG'].mean())
-        home_ga = df.groupby('HomeTeam')['FTAG'].transform(
-            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
-        ).fillna(df['FTAG'].mean())
-        away_gf = df.groupby('AwayTeam')['FTAG'].transform(
-            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
-        ).fillna(df['FTAG'].mean())
-        away_ga = df.groupby('AwayTeam')['FTHG'].transform(
-            lambda x: x.shift(1).ewm(span=span, adjust=False).mean()
-        ).fillna(df['FTHG'].mean())
-
-        league_avg = max(df['FTHG'].mean(), 0.5)
-
-        # Expected goals: attacker's scoring rate adjusted by opponent's defence
-        mu_h = ((home_gf / (away_ga + 0.5)) * league_avg).clip(lower=0.1, upper=8.0)
-        mu_a = ((away_gf / (home_ga + 0.5)) * league_avg).clip(lower=0.1, upper=8.0)
-
-        def poisson_probs_vec(mu_h_val, mu_a_val):
-            p_h, p_d, p_a = 0.0, 0.0, 0.0
-            for h in range(7):
-                for a in range(7):
-                    p = poisson.pmf(h, mu_h_val) * poisson.pmf(a, mu_a_val)
-                    if h > a:   p_h += p
+                    if h > a:    p_h += p
                     elif h == a: p_d += p
                     else:        p_a += p
-            return p_h, p_d, p_a
+            return pd.Series([p_h, p_d, p_a])
 
-        stat_probs = [poisson_probs_vec(mh, ma) for mh, ma in zip(mu_h, mu_a)]
-        stat_df = pd.DataFrame(stat_probs, columns=['Stat_Prob_H', 'Stat_Prob_D', 'Stat_Prob_A'], index=df.index)
-        return pd.concat([df, stat_df], axis=1)
+        probs = df.apply(row_poisson, axis=1)
+        probs.columns = ['Math_Prob_H','Math_Prob_D','Math_Prob_A']
+        return pd.concat([df, probs], axis=1)
+
+    def _calc_stats_poisson(self, df):
+        """
+        Stats-derived Poisson — uses rolling goals-for as attack lambda.
+        This is independent of odds and therefore valid for the Rebel model.
+        Computed AFTER rolling stats so H_Roll_Adj_GF is available.
+        """
+        def row_poisson(row):
+            mu_h = max(0.3, row.get('H_Roll_Adj_GF', 1.35))
+            mu_a = max(0.3, row.get('A_Roll_Adj_GF', 1.15))
+            p_h = p_d = p_a = 0.0
+            for h in range(7):
+                for a in range(7):
+                    p = poisson.pmf(h, mu_h) * poisson.pmf(a, mu_a)
+                    if h > a:    p_h += p
+                    elif h == a: p_d += p
+                    else:        p_a += p
+            return pd.Series([p_h, p_d, p_a])
+
+        probs = df.apply(row_poisson, axis=1)
+        probs.columns = ['Stats_Prob_H','Stats_Prob_D','Stats_Prob_A']
+        return pd.concat([df, probs], axis=1)
 
     def _calc_rolling_stats(self, df):
-        """Calculates advanced rolling statistics with league-average fillna."""
-        # 1. Transform to Long Format
-        home_games = df[['Date','HomeTeam','FTHG','FTAG','HS','AS','HST','AST','HC','AC','HF','AF','HY','AY','HR','AR','FTR']].copy()
-        home_games.columns = ['Date','Team','GF','GA','SF','SA','STF','STA','CF','CA','Fouls','FoulsAg','Yel','YelAg','Red','RedAg','Res']
-        home_games['IsHome'] = 1
-        home_games['Opponent'] = df['AwayTeam']
+        home_games = df[['Date','HomeTeam','FTHG','FTAG','HS','AS','HST','AST',
+                         'HC','AC','HF','AF','HY','AY','HR','AR','FTR']].copy()
+        home_games.columns = ['Date','Team','GF','GA','SF','SA','STF','STA',
+                               'CF','CA','Fouls','FoulsAg','Yel','YelAg','Red','RedAg','Res']
+        home_games['IsHome']   = 1
+        home_games['Opponent'] = df['AwayTeam'].values
 
-        away_games = df[['Date','AwayTeam','FTAG','FTHG','AS','HS','AST','HST','AC','HC','AF','HF','AY','HY','AR','HR','FTR']].copy()
-        away_games.columns = ['Date','Team','GF','GA','SF','SA','STF','STA','CF','CA','Fouls','FoulsAg','Yel','YelAg','Red','RedAg','Res']
-        away_games['IsHome'] = 0
-        away_games['Opponent'] = df['HomeTeam']
+        away_games = df[['Date','AwayTeam','FTAG','FTHG','AS','HS','AST','HST',
+                         'AC','HC','AF','HF','AY','HY','AR','HR','FTR']].copy()
+        away_games.columns = ['Date','Team','GF','GA','SF','SA','STF','STA',
+                               'CF','CA','Fouls','FoulsAg','Yel','YelAg','Red','RedAg','Res']
+        away_games['IsHome']   = 0
+        away_games['Opponent'] = df['HomeTeam'].values
 
         all_games = pd.concat([home_games, away_games]).sort_values('Date').reset_index(drop=True)
 
-        # 2. Base Metrics
-        all_games['Win'] = (((all_games['IsHome']==1) & (all_games['Res']=='H')) | ((all_games['IsHome']==0) & (all_games['Res']=='A'))).astype(int)
-        all_games['Draw'] = (all_games['Res']=='D').astype(int)
+        all_games['Win']    = (
+            ((all_games['IsHome']==1) & (all_games['Res']=='H')) |
+            ((all_games['IsHome']==0) & (all_games['Res']=='A'))
+        ).astype(int)
+        all_games['Draw']   = (all_games['Res']=='D').astype(int)
         all_games['Points'] = all_games['Win']*3 + all_games['Draw']
-        all_games['DiscPoints'] = all_games['Yel'] + (all_games['Red'] * 10)
-        all_games['TotalGoals'] = all_games['GF'] + all_games['GA']
+        all_games['DiscPoints']  = all_games['Yel'] + (all_games['Red'] * 10)
+        all_games['TotalGoals']  = all_games['GF'] + all_games['GA']
 
-        # 3. Opponent Adjustment
+        # Opponent-adjusted goals
         avg_ga = all_games['GA'].mean()
-        all_games['Raw_Roll_GA'] = all_games.groupby('Team')['GA'].transform(lambda x: x.shift(1).ewm(span=10).mean().fillna(avg_ga))
-
-        lookup = all_games[['Date', 'Team', 'Raw_Roll_GA']].rename(columns={'Team': 'Opponent', 'Raw_Roll_GA': 'Opp_Def_Strength'})
-        all_games = pd.merge(all_games, lookup, on=['Date', 'Opponent'], how='left')
+        all_games['Raw_Roll_GA'] = all_games.groupby('Team')['GA'].transform(
+            lambda x: x.shift(1).ewm(span=10).mean().fillna(avg_ga)
+        )
+        lookup = (
+            all_games[['Date','Team','Raw_Roll_GA']]
+            .rename(columns={'Team':'Opponent','Raw_Roll_GA':'Opp_Def_Strength'})
+        )
+        all_games = pd.merge(all_games, lookup, on=['Date','Opponent'], how='left')
         all_games['Opp_Def_Strength'] = all_games['Opp_Def_Strength'].fillna(avg_ga)
-
         all_games['Adj_GF'] = (all_games['GF'] / (all_games['Opp_Def_Strength'] + 0.1)) * avg_ga
         all_games['Adj_SF'] = (all_games['SF'] / (all_games['Opp_Def_Strength']*5 + 0.1)) * (avg_ga * 5)
 
-        # 4. Rolling Aggregations
-        cols_to_roll = ['Adj_GF', 'GA', 'Adj_SF', 'SA', 'STF', 'STA', 'CF', 'CA', 'Points', 'Fouls', 'DiscPoints', 'TotalGoals']
-
-        defaults = all_games[cols_to_roll].mean().to_dict()
+        cols_to_roll = ['Adj_GF','GA','Adj_SF','SA','STF','STA','CF','CA',
+                        'Points','Fouls','DiscPoints','TotalGoals']
+        defaults     = all_games[cols_to_roll].mean().to_dict()
 
         grouped_mean = all_games.groupby('Team')[cols_to_roll].transform(
             lambda x: x.shift(1).ewm(span=self.config['ewm_span']).mean()
-        )
-        grouped_mean = grouped_mean.fillna(value=defaults)
+        ).fillna(value=defaults)
         grouped_mean.columns = [f'Roll_{c}' for c in cols_to_roll]
 
-        # 5. Volatility
-        grouped_std = all_games.groupby('Team')[['GF']].transform(lambda x: x.shift(1).rolling(self.config['ewm_span']).std())
-        grouped_std = grouped_std.fillna(all_games['GF'].std())
+        grouped_std = all_games.groupby('Team')[['GF']].transform(
+            lambda x: x.shift(1).rolling(self.config['ewm_span']).std()
+        ).fillna(all_games['GF'].std())
         grouped_std.columns = ['Roll_GF_Std']
 
-        # 6. Specific Form
-        all_games['Specific_Form'] = all_games.groupby(['Team', 'IsHome'])['Points'].transform(
+        all_games['Specific_Form'] = all_games.groupby(['Team','IsHome'])['Points'].transform(
             lambda x: x.shift(1).ewm(span=5).mean()
         ).fillna(1.3)
 
-        # 7. Merge back
         all_games = pd.concat([all_games, grouped_mean, grouped_std], axis=1)
-        feature_cols = list(grouped_mean.columns) + ['Roll_GF_Std', 'Specific_Form']
+        feat_cols = list(grouped_mean.columns) + ['Roll_GF_Std','Specific_Form']
 
-        h_stats = all_games[all_games['IsHome']==1][['Date','Team'] + feature_cols].rename(columns={c: f'H_{c}' for c in feature_cols})
-        a_stats = all_games[all_games['IsHome']==0][['Date','Team'] + feature_cols].rename(columns={c: f'A_{c}' for c in feature_cols})
+        h_stats = (
+            all_games[all_games['IsHome']==1][['Date','Team'] + feat_cols]
+            .rename(columns={c: f'H_{c}' for c in feat_cols})
+        )
+        a_stats = (
+            all_games[all_games['IsHome']==0][['Date','Team'] + feat_cols]
+            .rename(columns={c: f'A_{c}' for c in feat_cols})
+        )
 
-        df_merged = pd.merge(df, h_stats, left_on=['Date','HomeTeam'], right_on=['Date','Team'], how='left').drop(columns=['Team'])
-        df_merged = pd.merge(df_merged, a_stats, left_on=['Date','AwayTeam'], right_on=['Date','Team'], how='left').drop(columns=['Team'])
+        df = pd.merge(df, h_stats, left_on=['Date','HomeTeam'], right_on=['Date','Team'], how='left').drop(columns=['Team'])
+        df = pd.merge(df, a_stats, left_on=['Date','AwayTeam'], right_on=['Date','Team'], how='left').drop(columns=['Team'])
+        return df.dropna()
 
-        return df_merged.dropna()
+    def _calc_elo(self, df):
+        """ELO with margin-of-victory multiplier. Stores final ratings on self.final_elo."""
+        elo          = EloTracker(k_factor=self.config['elo_k'], home_adv=self.config['elo_home_adv'])
+        feature_rows = []
+        df           = df.sort_values('Date').reset_index(drop=True)
 
-    def _calc_elo_and_h2h(self, df):
-        """Calculates Elo ratings and decay-weighted H2H history."""
-        elo = EloTracker(k_factor=self.config['elo_k'], home_adv=self.config['elo_home_adv'])
-        features_rows = []
-
-        df = df.sort_values('Date').reset_index(drop=True)
-
-        for i, row in df.iterrows():
-            date, h, a, res = row['Date'], row['HomeTeam'], row['AwayTeam'], row['FTR']
-
-            # 1. Get PRE-MATCH Ratings
-            h_elo = elo.get_rating(h)
-            a_elo = elo.get_rating(a)
-
-            # 2. Update Elo for Next Time
-            gd = abs(row['FTHG'] - row['FTAG'])
+        for _, row in df.iterrows():
+            h, a, res = row['HomeTeam'], row['AwayTeam'], row['FTR']
+            h_elo     = elo.get_rating(h)
+            a_elo     = elo.get_rating(a)
+            gd        = abs(row['FTHG'] - row['FTAG'])
             elo.update(h, a, res, gd)
+            feature_rows.append({'H_Elo': h_elo, 'A_Elo': a_elo})
 
-            # 3. Weighted H2H
-            mask = ((df['HomeTeam']==h) & (df['AwayTeam']==a)) | ((df['HomeTeam']==a) & (df['AwayTeam']==h))
-            h2h_matches = df[mask & (df['Date'] < date)].tail(5)
+        # Store final ELO state for prediction time (no more full rebuild per call)
+        self.final_elo = elo
 
-            h2h_score = 0
-            decay_weight = 1.0
-
-            for _, r in h2h_matches.iloc[::-1].iterrows():
-                pts = 0
-                if r['FTR'] == 'D': pts = 1
-                elif (r['HomeTeam']==h and r['FTR']=='H') or (r['AwayTeam']==h and r['FTR']=='A'): pts = 3
-                h2h_score += (pts * decay_weight)
-                decay_weight *= self.config['h2h_decay']
-
-            features_rows.append({'H_Elo': h_elo, 'A_Elo': a_elo, 'H2H_Weighted': h2h_score})
-
-        feat_df = pd.DataFrame(features_rows, index=df.index)
+        feat_df = pd.DataFrame(feature_rows, index=df.index)
         return pd.concat([df, feat_df], axis=1)
 
     def feature_engineering(self):
-        print(f"⚙️ [{self.league_code}] Engineering Features (Twin-Engine Setup)...")
+        print(f"[{self.league_code}] Engineering features...")
         df = self.data.copy()
 
-        # Execute Modular Steps
         df = self._calc_implied_odds(df)
-        df = self._calc_poisson_math(df)          # odds-derived Poisson → Anchor only
+        df = self._calc_odds_poisson(df)
         df = self._calc_rolling_stats(df)
-        df = self._calc_poisson_from_stats(df)    # FIX 3.3: stats-derived Poisson → Rebel
-        df = self._calc_elo_and_h2h(df)
+        df = self._calc_elo(df)
 
-        # --- FINAL DERIVED FEATURES ---
-        df['Diff_Elo'] = df['H_Elo'] - df['A_Elo']
-        df['Abs_Diff_Elo'] = abs(df['H_Elo'] - df['A_Elo'])
+        # Derived differentials
+        df['Diff_Elo']         = df['H_Elo'] - df['A_Elo']
+        df['Abs_Diff_Elo']     = df['Diff_Elo'].abs()
+        df['Diff_ShotDom']     = (df['H_Roll_Adj_SF']/(df['H_Roll_Adj_SF']+df['H_Roll_SA']+0.1)) - \
+                                  (df['A_Roll_Adj_SF']/(df['A_Roll_Adj_SF']+df['A_Roll_SA']+0.1))
+        df['Diff_SOTDom']      = (df['H_Roll_STF']/(df['H_Roll_STF']+df['H_Roll_STA']+0.1)) - \
+                                  (df['A_Roll_STF']/(df['A_Roll_STF']+df['A_Roll_STA']+0.1))
+        df['Diff_CornDom']     = (df['H_Roll_CF']/(df['H_Roll_CF']+df['H_Roll_CA']+0.1)) - \
+                                  (df['A_Roll_CF']/(df['A_Roll_CF']+df['A_Roll_CA']+0.1))
+        df['Diff_SpecificForm']= df['H_Specific_Form'] - df['A_Specific_Form']
+        df['Diff_Volatility']  = df['H_Roll_GF_Std']   - df['A_Roll_GF_Std']
+        df['Diff_Aggression']  = df['H_Roll_Fouls']     - df['A_Roll_Fouls']
+        df['Diff_Discipline']  = df['H_Roll_DiscPoints']- df['A_Roll_DiscPoints']
+        df['Boredom_Score']    = (df['H_Roll_TotalGoals'] + df['A_Roll_TotalGoals']) / 2
+        df['Market_Elo_Div']   = df['Imp_H'] - (1 / (1 + 10**((-df['Diff_Elo']-75)/400)))
 
-        df['Diff_ShotDom'] = (df['H_Roll_Adj_SF']/(df['H_Roll_Adj_SF']+df['H_Roll_SA']+0.1)) - \
-                             (df['A_Roll_Adj_SF']/(df['A_Roll_Adj_SF']+df['A_Roll_SA']+0.1))
+        # Stats-based Poisson (requires rolling stats to be computed first)
+        df = self._calc_stats_poisson(df)
 
-        df['Diff_SOTDom'] = (df['H_Roll_STF']/(df['H_Roll_STF']+df['H_Roll_STA']+0.1)) - \
-                            (df['A_Roll_STF']/(df['A_Roll_STF']+df['A_Roll_STA']+0.1))
+        # --- xG from Understat ---
+        if XG_AVAILABLE:
+            try:
+                raw_xg = xg_engine.fetch_xg_data(self.league_code)
+                if not raw_xg.empty:
+                    self.xg_features_df = xg_engine.build_rolling_xg_features(raw_xg, ewm_span=6)
+                    self.xg_loaded      = True
+                    df = xg_engine.merge_xg_into_match_df(df, self.xg_features_df)
+                    print(f"[{self.league_code}] xG features merged.")
+                else:
+                    print(f"[{self.league_code}] Understat returned no data — continuing without xG.")
+            except Exception as e:
+                print(f"[{self.league_code}] xG load failed: {e} — continuing without xG.")
 
-        df['Diff_CornDom'] = (df['H_Roll_CF']/(df['H_Roll_CF']+df['H_Roll_CA']+0.1)) - \
-                             (df['A_Roll_CF']/(df['A_Roll_CF']+df['A_Roll_CA']+0.1))
-
-        df['Diff_SpecificForm'] = df['H_Specific_Form'] - df['A_Specific_Form']
-        df['Diff_Volatility'] = df['H_Roll_GF_Std'] - df['A_Roll_GF_Std']
-        df['Diff_Aggression'] = df['H_Roll_Fouls'] - df['A_Roll_Fouls']
-        df['Diff_Discipline'] = df['H_Roll_DiscPoints'] - df['A_Roll_DiscPoints']
-        df['Boredom_Score'] = (df['H_Roll_TotalGoals'] + df['A_Roll_TotalGoals']) / 2
-
-        df['Market_Elo_Div'] = df['Imp_H'] - (1 / (1 + 10 ** ((-df['Diff_Elo']-75)/400)))
+        # Zero-fill xG columns so feature lists stay consistent
+        for col in ['Diff_xg_diff','Diff_xg_ratio','H_xg_against_ema','A_xg_against_ema']:
+            if col not in df.columns:
+                df[col] = 0.0
 
         # --- FEATURE SET DEFINITIONS ---
-        # FIX 3.3: Rebel uses stats-derived Poisson (independent of market odds).
-        # Anchor uses odds-derived Poisson — the market signal is intentional there.
-        # FIX 3.8: H2H_Weighted removed from Rebel — academic research shows H2H adds
-        # almost no predictive value beyond ELO + form when squads/managers differ.
-        # Anchor retains it as contextual flavour alongside its other market features.
+        # Rebel: pure performance — no market odds, includes independent Poisson + xG
         self.features_rebel = [
-            'Diff_Elo', 'Diff_ShotDom', 'Diff_SOTDom', 'Diff_CornDom',
-            'Diff_SpecificForm', 'Diff_Volatility', 'Diff_Aggression', 'Diff_Discipline',
-            'Abs_Diff_Elo', 'Boredom_Score', 'H_Elo', 'A_Elo',
-            'Stat_Prob_H', 'Stat_Prob_D', 'Stat_Prob_A',
+            'Diff_Elo','Diff_ShotDom','Diff_SOTDom','Diff_CornDom',
+            'Diff_SpecificForm','Diff_Volatility','Diff_Aggression','Diff_Discipline',
+            'Abs_Diff_Elo','Boredom_Score','H_Elo','A_Elo',
+            'Diff_xg_diff','Diff_xg_ratio','H_xg_against_ema','A_xg_against_ema',
+            'Stats_Prob_H','Stats_Prob_D','Stats_Prob_A',
         ]
 
-        self.features_anchor = [
-            'Diff_Elo', 'Diff_ShotDom', 'Diff_SOTDom', 'Diff_CornDom',
-            'Diff_SpecificForm', 'Diff_Volatility', 'Diff_Aggression', 'Diff_Discipline',
-            'Abs_Diff_Elo', 'Boredom_Score', 'H2H_Weighted', 'H_Elo', 'A_Elo',
-            'Market_Elo_Div', 'Imp_H', 'Imp_D', 'Imp_A',
-            'Math_Prob_H', 'Math_Prob_D', 'Math_Prob_A',
+        # Anchor: adds market signals on top of Rebel
+        self.features_anchor = self.features_rebel + [
+            'Market_Elo_Div','Imp_H','Imp_D','Imp_A',
+            'Math_Prob_H','Math_Prob_D','Math_Prob_A',
         ]
 
-        # SAVE FULL DATA (For lookup during prediction)
+        # Filter to only cols that actually exist (safety guard)
+        self.features_rebel  = [c for c in self.features_rebel  if c in df.columns]
+        self.features_anchor = [c for c in self.features_anchor if c in df.columns]
+
         self.feat_data = df.copy()
+        train_cols     = list(set(self.features_anchor + ['Target','Season_ID','Date']))
+        self.proc_data = df[[c for c in train_cols if c in df.columns]].copy()
 
-        # SLICE FOR TRAINING
-        self.proc_data = df[self.features_anchor + ['Target', 'Season_ID', 'Date']]
-        print(f"✅ [{self.league_code}] Hybrid Sets Ready: Rebel ({len(self.features_rebel)} feats) | Anchor ({len(self.features_anchor)} feats)")
+        print(f"[{self.league_code}] Ready — Rebel ({len(self.features_rebel)} feats) | "
+              f"Anchor ({len(self.features_anchor)} feats)")
 
     # -------------------------------------------------------------------------
-    # C. TRAINING & TUNING
+    # C. TRAINING
     # -------------------------------------------------------------------------
     def calculate_decay_weights(self, season_ids):
         max_season = season_ids.max()
         return self.config['decay_alpha'] ** (max_season - season_ids.values)
 
     def tune_hyperparameters(self, features, y, season_ids, n_trials=10):
-        print(f"   🔎 Tuning hyperparameters ({n_trials} trials)...")
+        print(f"   Tuning hyperparameters ({n_trials} trials)...")
 
         def objective(trial):
             param = {
-                'n_estimators': trial.suggest_int('n_estimators', 200, 600),
-                'max_depth': trial.suggest_int('max_depth', 3, 6),
-                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
-                'subsample': trial.suggest_float('subsample', 0.6, 0.9),
-                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 0.9),
-                'objective': 'multi:softprob',
-                'num_class': 3,
-                'n_jobs': -1,
-                'random_state': 42,
-                'verbosity': 0
+                'n_estimators':      trial.suggest_int('n_estimators', 200, 600),
+                'max_depth':         trial.suggest_int('max_depth', 3, 6),
+                'learning_rate':     trial.suggest_float('learning_rate', 0.01, 0.1),
+                'subsample':         trial.suggest_float('subsample', 0.6, 0.9),
+                'colsample_bytree':  trial.suggest_float('colsample_bytree', 0.6, 0.9),
+                'objective': 'multi:softprob', 'num_class': 3,
+                'n_jobs': -1, 'random_state': 42, 'verbosity': 0,
             }
-
-            tscv = TimeSeriesSplit(n_splits=3)
+            tscv   = TimeSeriesSplit(n_splits=3)
             scores = []
-
-            for train_index, test_index in tscv.split(features):
-                X_tr, X_val = features.iloc[train_index], features.iloc[test_index]
-                y_tr, y_val = y.iloc[train_index], y.iloc[test_index]
-                w_tr = self.calculate_decay_weights(season_ids.iloc[train_index])
-
-                scaler = RobustScaler()
-                X_tr_s = scaler.fit_transform(X_tr)
-                X_val_s = scaler.transform(X_val)
-
-                model = XGBClassifier(**param)
+            for train_idx, val_idx in tscv.split(features):
+                X_tr, X_val = features.iloc[train_idx], features.iloc[val_idx]
+                y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+                w_tr        = self.calculate_decay_weights(season_ids.iloc[train_idx])
+                scaler      = RobustScaler()
+                X_tr_s      = scaler.fit_transform(X_tr)
+                X_val_s     = scaler.transform(X_val)
+                model       = XGBClassifier(**param)
                 model.fit(X_tr_s, y_tr, sample_weight=w_tr)
-                preds = model.predict(X_val_s)
-                scores.append(f1_score(y_val, preds, average='macro'))
-
+                proba       = model.predict_proba(X_val_s)
+                scores.append(log_loss(y_val, proba))
             return np.mean(scores)
 
-        study = optuna.create_study(direction='maximize')
+        study = optuna.create_study(direction='minimize')
         study.optimize(objective, n_trials=n_trials)
-        print(f"   ✨ Best Params: {study.best_params}")
-        return study.best_params
+        print(f"   Best log-loss: {study.best_value:.4f} | Params: {study.best_params}")
+        return {**self.config['xgb_params'], **study.best_params}
 
     def train_models(self, perform_tuning=False):
-        print(f"\n🧠 [{self.league_code}] Training Twin Engines (Target: Macro F1)...")
+        print(f"\n[{self.league_code}] Training Anchor + Rebel...")
 
-        y = self.proc_data['Target']
+        y          = self.proc_data['Target']
         season_ids = self.proc_data['Season_ID']
-        split = int(len(self.proc_data) * self.config['split_ratio'])
-
-        w_train = self.calculate_decay_weights(season_ids.iloc[:split])
-        y_train = y.iloc[:split]; y_test = y.iloc[split:]
+        split      = int(len(self.proc_data) * self.config['split_ratio'])
+        w_train    = self.calculate_decay_weights(season_ids.iloc[:split])
+        y_train    = y.iloc[:split]
+        y_test     = y.iloc[split:]
 
         def train_engine(name, feature_cols):
-            print(f"   -> Training {name} Model...")
-            X = self.proc_data[feature_cols]
-            X_train = X.iloc[:split]; X_test = X.iloc[split:]
+            print(f"   Training {name}...")
+            avail_cols = [c for c in feature_cols if c in self.proc_data.columns]
+            X          = self.proc_data[avail_cols]
+            X_train    = X.iloc[:split]
+            X_test     = X.iloc[split:]
 
-            if perform_tuning:
-                best_params = self.tune_hyperparameters(X_train, y_train, season_ids.iloc[:split])
-            else:
-                best_params = self.config['xgb_params']
+            params = (
+                self.tune_hyperparameters(X_train, y_train, season_ids.iloc[:split])
+                if perform_tuning else self.config['xgb_params']
+            )
 
-            scaler = RobustScaler()
-            X_train_s = scaler.fit_transform(X_train)
-            X_test_s = scaler.transform(X_test)
+            scaler      = RobustScaler()
+            X_train_s   = scaler.fit_transform(X_train)
+            X_test_s    = scaler.transform(X_test)
 
-            base_model = XGBClassifier(**best_params)
-            base_model.fit(X_train_s, y_train, sample_weight=w_train)
+            model = XGBClassifier(**params)
+            model.fit(X_train_s, y_train, sample_weight=w_train)
 
-            # FIX 3.7: Wrap with isotonic calibration so raw probabilities reflect
-            # true empirical frequencies. This is essential for edge calculations —
-            # uncalibrated probabilities make value-betting logic meaningless.
-            # cv='prefit' because we supply our own train/test split.
-            model = CalibratedClassifierCV(base_model, method='isotonic', cv='prefit')
-            model.fit(X_test_s, y_test)   # calibrate on held-out test set
+            # Calibrate probabilities
+            cal_model = CalibratedClassifierCV(model, method='isotonic', cv=3)
+            cal_model.fit(X_train_s, y_train)
 
-            y_proba = model.predict_proba(X_test_s)
-            best_f1, best_thresh = 0, 0.30
-
-            for thresh in np.arange(0.25, 0.35, 0.01):
+            # Evaluate on holdout
+            y_proba    = cal_model.predict_proba(X_test_s)
+            best_f1    = 0
+            best_thresh = 0.30
+            for thresh in np.arange(0.25, 0.50, 0.01):
                 preds = []
                 for row in y_proba:
                     if row[1] > thresh: preds.append(1)
                     else: preds.append(2 if row[2] > row[0] else 0)
                 score = f1_score(y_test, preds, average='macro')
                 if score > best_f1:
-                    best_f1 = score
+                    best_f1    = score
                     best_thresh = thresh
 
-            print(f"      {name} Threshold: {best_thresh:.3f} | F1: {best_f1:.4f} (calibrated)")
-            return model, scaler, best_thresh
+            oos_ll = log_loss(y_test, y_proba)
+            print(f"   {name} — thresh: {best_thresh:.2f} | F1: {best_f1:.4f} | log-loss: {oos_ll:.4f}")
+            return cal_model, scaler, best_thresh, avail_cols
 
-        self.model_anchor, self.scaler_anchor, self.thresh_anchor = train_engine("ANCHOR", self.features_anchor)
-        self.model_rebel, self.scaler_rebel, self.thresh_rebel = train_engine("REBEL", self.features_rebel)
+        self.model_anchor, self.scaler_anchor, self.thresh_anchor, self.features_anchor = \
+            train_engine("ANCHOR", self.features_anchor)
+        self.model_rebel,  self.scaler_rebel,  self.thresh_rebel,  self.features_rebel  = \
+            train_engine("REBEL",  self.features_rebel)
 
-        # FIX 2.2: Build and store final ELO state ONCE after training.
-        # Prediction must read from this snapshot — NOT replay history each call.
-        elo_snap = EloTracker(k_factor=self.config['elo_k'], home_adv=self.config['elo_home_adv'])
-        for _, row in self.data.sort_values('Date').iterrows():
-            elo_snap.update(row['HomeTeam'], row['AwayTeam'], row['FTR'], abs(row['FTHG'] - row['FTAG']))
-        self._elo_snapshot = elo_snap
-        print(f"[{self.league_code}] ELO snapshot stored ({len(elo_snap.ratings)} teams).")
-    
+    # -------------------------------------------------------------------------
+    # D. HISTORY (for dashboard Recent Results table)
+    # -------------------------------------------------------------------------
     def get_history(self, n=10):
-        # Extracts last n games and calculates Anchor/Rebel for them
-        if self.proc_data is None: return []
-        
+        if self.proc_data is None:
+            return []
+
         last_games = self.feat_data.tail(n).copy()
-        history = []
-        
-        for idx, row in last_games.iterrows():
-            # 1. Prepare REBEL Prediction
-            f_rebel = pd.DataFrame([row], columns=self.features_rebel)
-            f_rebel = f_rebel.reindex(columns=self.features_rebel, fill_value=0)
-            probs_reb = self.model_rebel.predict_proba(self.scaler_rebel.transform(f_rebel))[0]
-            
-            # 2. Prepare ANCHOR Prediction
-            f_anchor = pd.DataFrame([row], columns=self.features_anchor)
-            f_anchor = f_anchor.reindex(columns=self.features_anchor, fill_value=0)
-            probs_anc = self.model_anchor.predict_proba(self.scaler_anchor.transform(f_anchor))[0]
+        history    = []
 
-            # 3. Determine Winners
-            win_reb = np.argmax(probs_reb) # 0=A, 1=D, 2=H
-            win_anc = np.argmax(probs_anc)
+        for _, row in last_games.iterrows():
+            def predict_row(feature_cols, model, scaler):
+                fvec = pd.DataFrame([row]).reindex(columns=feature_cols, fill_value=0)
+                return model.predict_proba(scaler.transform(fvec))[0]
 
-            def get_lbl(code): return "HOME" if code == 2 else ("AWAY" if code == 0 else "DRAW")
-            
+            probs_reb = predict_row(self.features_rebel,  self.model_rebel,  self.scaler_rebel)
+            probs_anc = predict_row(self.features_anchor, self.model_anchor, self.scaler_anchor)
+
+            def lbl(idx): return 'HOME' if idx == 2 else ('AWAY' if idx == 0 else 'DRAW')
+
             history.append({
-                'home_team': row['HomeTeam'], # Needed for Trinity lookup
-                'away_team': row['AwayTeam'],
-                'date': row['Date'].strftime('%d-%m'),
-                'fixture': f"{row['HomeTeam']} vs {row['AwayTeam']}",
-                'result': f"{row['FTHG']:.0f}-{row['FTAG']:.0f} ({row['FTR']})",
-                'pred_rebel': get_lbl(win_reb),
-                'pred_anchor': get_lbl(win_anc),
-                'actual_code': self.target_map[row['FTR']]
+                'home_team':   row['HomeTeam'],
+                'away_team':   row['AwayTeam'],
+                'date':        row['Date'].strftime('%d-%m'),
+                'fixture':     f"{row['HomeTeam']} vs {row['AwayTeam']}",
+                'result':      f"{row['FTHG']:.0f}-{row['FTAG']:.0f} ({row['FTR']})",
+                'pred_rebel':  lbl(int(np.argmax(probs_reb))),
+                'pred_anchor': lbl(int(np.argmax(probs_anc))),
             })
-            
+
         return history[::-1]
 
-# =============================================================================
-# FLASK INTERFACE BLOCK (Multi-League Updated)
-# =============================================================================
 
-# Key = League Code, Value = HybridPipeline instance
+# =============================================================================
+# INTERFACE BLOCK
+# =============================================================================
 _pipelines = {}
+
 
 def reset_pipeline():
     global _pipelines
-    print("TWIN ENGINE SYSTEM WIDE RESET: Clearing all league memory...")
+    print("Twin-Engine reset: clearing all league memory...")
     _pipelines = {}
 
+
 def get_history_data(league_code='E0'):
-    global _pipelines
-    if league_code not in _pipelines: return []
+    if league_code not in _pipelines:
+        return []
     return _pipelines[league_code].get_history(10)
+
 
 def get_model_2_prediction(home_team, away_team, home_odds, draw_odds, away_odds, league_code='E0'):
     global _pipelines
-    
-    # Initialize pipeline for this specific league if not already present
+
+    # Initialise pipeline for league if not ready
     if league_code not in _pipelines:
-        print(f"Initializing Twin-Engine Model for League: {league_code}...")
+        print(f"Initialising Anchor/Rebel for {league_code}...")
         pipeline = HybridPipeline(league_code=league_code)
-        
-        success = pipeline.fetch_data()
-        if not success:
-            print(f"Failed to load data for {league_code} in Model 2")
+        if not pipeline.fetch_data():
+            print(f"Anchor/Rebel: data fetch failed for {league_code}")
             return None
-            
         pipeline.feature_engineering()
         pipeline.train_models(perform_tuning=False)
         _pipelines[league_code] = pipeline
-    
+        print(f"Anchor/Rebel [{league_code}] ready.")
+
     ai = _pipelines[league_code]
-    
+
     try:
-        # 1. Get Team Stats (Logic from class)
+        # 1. Get rolling stats from most recent game record for each team
         def get_team_stats(team):
-            team_games = ai.feat_data[(ai.feat_data['HomeTeam'] == team) | (ai.feat_data['AwayTeam'] == team)]
-            if team_games.empty: return None
-            last_idx = team_games.last_valid_index()
-            last_row = ai.feat_data.loc[last_idx]
-            was_home = (last_row['HomeTeam'] == team)
-            prefix = 'H_' if was_home else 'A_'
+            rows = ai.feat_data[
+                (ai.feat_data['HomeTeam'] == team) | (ai.feat_data['AwayTeam'] == team)
+            ]
+            if rows.empty:
+                return None
+            last = ai.feat_data.loc[rows.last_valid_index()]
+            pfx  = 'H_' if last['HomeTeam'] == team else 'A_'
             return {
-                'Adj_SF': last_row.get(f'{prefix}Roll_Adj_SF', 5.0),
-                'SA': last_row.get(f'{prefix}Roll_SA', 5.0),
-                'STF': last_row.get(f'{prefix}Roll_STF', 3.0),
-                'STA': last_row.get(f'{prefix}Roll_STA', 3.0),
-                'CF': last_row.get(f'{prefix}Roll_CF', 4.0),
-                'CA': last_row.get(f'{prefix}Roll_CA', 4.0),
-                'SpecForm': last_row.get(f'{prefix}Specific_Form', 1.0),
-                'GF_Std': last_row.get(f'{prefix}Roll_GF_Std', 0.5),
-                'Fouls': last_row.get(f'{prefix}Roll_Fouls', 10.0),
-                'Disc': last_row.get(f'{prefix}Roll_DiscPoints', 1.0),
-                'TotG': last_row.get(f'{prefix}Roll_TotalGoals', 2.5)
+                'Adj_SF':   float(last.get(f'{pfx}Roll_Adj_SF',   5.0)),
+                'SA':       float(last.get(f'{pfx}Roll_SA',        5.0)),
+                'STF':      float(last.get(f'{pfx}Roll_STF',       3.0)),
+                'STA':      float(last.get(f'{pfx}Roll_STA',       3.0)),
+                'CF':       float(last.get(f'{pfx}Roll_CF',        4.0)),
+                'CA':       float(last.get(f'{pfx}Roll_CA',        4.0)),
+                'SpecForm': float(last.get(f'{pfx}Specific_Form',  1.0)),
+                'GF_Std':   float(last.get(f'{pfx}Roll_GF_Std',   0.5)),
+                'Fouls':    float(last.get(f'{pfx}Roll_Fouls',    10.0)),
+                'Disc':     float(last.get(f'{pfx}Roll_DiscPoints',1.0)),
+                'TotG':     float(last.get(f'{pfx}Roll_TotalGoals',2.5)),
+                'Adj_GF':   float(last.get(f'{pfx}Roll_Adj_GF',   1.35)),
             }
 
         h_s = get_team_stats(home_team)
         a_s = get_team_stats(away_team)
-        if not h_s or not a_s: return None
+        if not h_s or not a_s:
+            return None
 
-        # 2. Read ELO from stored snapshot — never replay history per-call (FIX 2.2)
-        elo = getattr(ai, '_elo_snapshot', None)
-        if elo is None:
-            # Fallback: build snapshot and cache it (only happens if train_models
-            # was called before this fix was deployed)
-            elo = EloTracker(k_factor=ai.config['elo_k'], home_adv=ai.config['elo_home_adv'])
-            for _, row in ai.data.sort_values('Date').iterrows():
-                elo.update(row['HomeTeam'], row['AwayTeam'], row['FTR'], abs(row['FTHG']-row['FTAG']))
-            ai._elo_snapshot = elo
-        h_elo = elo.get_rating(home_team)
-        a_elo = elo.get_rating(away_team)
+        # 2. ELO from stored final state — O(1), no more full replay
+        h_elo = ai.final_elo.get_rating(home_team)
+        a_elo = ai.final_elo.get_rating(away_team)
 
-        # 3. Poisson Calculation
-        prob_h, prob_a = 1/home_odds, 1/away_odds
-        mu_h = max(0.1, 1.35 + (prob_h - prob_a) * 1.5)
-        mu_a = max(0.1, 1.15 + (prob_a - prob_h) * 1.0)
-        p_home, p_draw, p_away = 0,0,0
+        # 3. Stats-based Poisson (Rebel — independent of odds)
+        mu_h = max(0.3, h_s['Adj_GF'])
+        mu_a = max(0.3, a_s['Adj_GF'])
+        stats_p_h = stats_p_d = stats_p_a = 0.0
+        for h in range(7):
+            for a in range(7):
+                p = poisson.pmf(h, mu_h) * poisson.pmf(a, mu_a)
+                if h > a:    stats_p_h += p
+                elif h == a: stats_p_d += p
+                else:        stats_p_a += p
+
+        # 4. Odds-based Poisson (Anchor only)
+        ph_mkt = 1 / home_odds
+        pa_mkt = 1 / away_odds
+        mu_h_m = max(0.1, 1.35 + (ph_mkt - pa_mkt) * 1.5)
+        mu_a_m = max(0.1, 1.15 + (pa_mkt - ph_mkt) * 1.0)
+        mkt_p_h = mkt_p_d = mkt_p_a = 0.0
         for h in range(6):
             for a in range(6):
-                p = poisson.pmf(h, mu_h) * poisson.pmf(a, mu_a)
-                if h>a: p_home+=p
-                elif h==a: p_draw+=p
-                else: p_away+=p
+                p = poisson.pmf(h, mu_h_m) * poisson.pmf(a, mu_a_m)
+                if h > a:    mkt_p_h += p
+                elif h == a: mkt_p_d += p
+                else:        mkt_p_a += p
 
-        # 4. H2H Logic
-        mask = ((ai.data['HomeTeam']==home_team) & (ai.data['AwayTeam']==away_team)) | \
-               ((ai.data['HomeTeam']==away_team) & (ai.data['AwayTeam']==home_team))
-        h2h_matches = ai.data[mask].tail(5)
-        h2h_score = 0
-        decay = 1.0
-        for _, r in h2h_matches.iloc[::-1].iterrows():
-            pts = 0
-            if r['FTR']=='D': pts=1
-            elif (r['HomeTeam']==home_team and r['FTR']=='H') or (r['AwayTeam']==home_team and r['FTR']=='A'): pts=3
-            h2h_score += (pts * decay)
-            decay *= ai.config['h2h_decay']
+        # 5. xG features from Understat
+        if ai.xg_loaded and not ai.xg_features_df.empty:
+            h_xg = xg_engine.get_current_xg_stats(home_team, ai.xg_features_df)
+            a_xg = xg_engine.get_current_xg_stats(away_team, ai.xg_features_df)
+        else:
+            h_xg = a_xg = {
+                'xg_diff_ema': 0.0, 'xg_ratio_ema': 0.5,
+                'xg_against_ema': 1.35,
+            }
 
-        # 5. Build Feature Vector
+        # 6. Assemble feature vector
         f = {}
-        f['Diff_Elo'] = h_elo - a_elo
-        f['Abs_Diff_Elo'] = abs(h_elo - a_elo)
-        f['Diff_ShotDom'] = (h_s['Adj_SF']/(h_s['Adj_SF']+h_s['SA']+0.1)) - (a_s['Adj_SF']/(a_s['Adj_SF']+a_s['SA']+0.1))
-        f['Diff_SOTDom'] = (h_s['STF']/(h_s['STF']+h_s['STA']+0.1)) - (a_s['STF']/(a_s['STF']+a_s['STA']+0.1))
-        f['Diff_CornDom'] = (h_s['CF']/(h_s['CF']+h_s['CA']+0.1)) - (a_s['CF']/(a_s['CF']+a_s['CA']+0.1))
+        f['Diff_Elo']          = h_elo - a_elo
+        f['Abs_Diff_Elo']      = abs(f['Diff_Elo'])
+        f['Diff_ShotDom']      = (h_s['Adj_SF']/(h_s['Adj_SF']+h_s['SA']+0.1)) - \
+                                  (a_s['Adj_SF']/(a_s['Adj_SF']+a_s['SA']+0.1))
+        f['Diff_SOTDom']       = (h_s['STF']/(h_s['STF']+h_s['STA']+0.1)) - \
+                                  (a_s['STF']/(a_s['STF']+a_s['STA']+0.1))
+        f['Diff_CornDom']      = (h_s['CF']/(h_s['CF']+h_s['CA']+0.1)) - \
+                                  (a_s['CF']/(a_s['CF']+a_s['CA']+0.1))
         f['Diff_SpecificForm'] = h_s['SpecForm'] - a_s['SpecForm']
-        f['Diff_Volatility'] = h_s['GF_Std'] - a_s['GF_Std']
-        f['Diff_Aggression'] = h_s['Fouls'] - a_s['Fouls']
-        f['Diff_Discipline'] = h_s['Disc'] - a_s['Disc']
-        f['Boredom_Score'] = (h_s['TotG'] + a_s['TotG']) / 2
-        f['H2H_Weighted'] = h2h_score
-        f['H_Elo'] = h_elo
-        f['A_Elo'] = a_elo
-        f['Market_Elo_Div'] = (1/home_odds) - (1 / (1 + 10 ** ((-f['Diff_Elo']-75)/400)))
-        f['Imp_H'] = 1/home_odds
-        f['Imp_D'] = 1/draw_odds
-        f['Imp_A'] = 1/away_odds
-        f['Math_Prob_H'] = p_home
-        f['Math_Prob_D'] = p_draw
-        f['Math_Prob_A'] = p_away
+        f['Diff_Volatility']   = h_s['GF_Std']   - a_s['GF_Std']
+        f['Diff_Aggression']   = h_s['Fouls']    - a_s['Fouls']
+        f['Diff_Discipline']   = h_s['Disc']     - a_s['Disc']
+        f['Boredom_Score']     = (h_s['TotG'] + a_s['TotG']) / 2
+        f['H_Elo']             = h_elo
+        f['A_Elo']             = a_elo
+        # Stats Poisson
+        f['Stats_Prob_H']      = stats_p_h
+        f['Stats_Prob_D']      = stats_p_d
+        f['Stats_Prob_A']      = stats_p_a
+        # xG
+        f['Diff_xg_diff']      = h_xg['xg_diff_ema']  - a_xg['xg_diff_ema']
+        f['Diff_xg_ratio']     = h_xg['xg_ratio_ema'] - a_xg['xg_ratio_ema']
+        f['H_xg_against_ema']  = h_xg['xg_against_ema']
+        f['A_xg_against_ema']  = a_xg['xg_against_ema']
+        # Anchor-only market features
+        f['Market_Elo_Div']    = (1/home_odds) - (1/(1 + 10**((-f['Diff_Elo']-75)/400)))
+        f['Imp_H']             = 1 / home_odds
+        f['Imp_D']             = 1 / draw_odds
+        f['Imp_A']             = 1 / away_odds
+        f['Math_Prob_H']       = mkt_p_h
+        f['Math_Prob_D']       = mkt_p_d
+        f['Math_Prob_A']       = mkt_p_a
 
-        # FIX 3.3: Stats-derived Poisson for Rebel — independent of market odds.
-        # Use team's rolling goals-for/against as attack/defence lambdas.
-        league_avg = 1.35  # approximate league average goals per game
-        mu_h_stat = max(0.1, (h_s['TotG'] / 2) / (a_s['TotG'] / 2 + 0.5) * league_avg)
-        mu_a_stat = max(0.1, (a_s['TotG'] / 2) / (h_s['TotG'] / 2 + 0.5) * league_avg)
-        sp_h, sp_d, sp_a = 0.0, 0.0, 0.0
-        for hg in range(7):
-            for ag in range(7):
-                p = poisson.pmf(hg, mu_h_stat) * poisson.pmf(ag, mu_a_stat)
-                if hg > ag:    sp_h += p
-                elif hg == ag: sp_d += p
-                else:          sp_a += p
-        f['Stat_Prob_H'] = sp_h
-        f['Stat_Prob_D'] = sp_d
-        f['Stat_Prob_A'] = sp_a
+        # 7. Predict
+        row_rebel  = pd.DataFrame([f]).reindex(columns=ai.features_rebel,  fill_value=0)
+        row_anchor = pd.DataFrame([f]).reindex(columns=ai.features_anchor, fill_value=0)
 
-        # 6. Predict Both Engines
-        # REBEL
-        row_rebel = pd.DataFrame([f], columns=ai.features_rebel)
-        probs_rebel = ai.model_rebel.predict_proba(ai.scaler_rebel.transform(row_rebel))[0]
-
-        # ANCHOR
-        row_anchor = pd.DataFrame([f], columns=ai.features_anchor)
+        probs_rebel  = ai.model_rebel.predict_proba(ai.scaler_rebel.transform(row_rebel))[0]
         probs_anchor = ai.model_anchor.predict_proba(ai.scaler_anchor.transform(row_anchor))[0]
 
         return {
-            "anchor": { "home": probs_anchor[2], "draw": probs_anchor[1], "away": probs_anchor[0] },
-            "rebel": { "home": probs_rebel[2], "draw": probs_rebel[1], "away": probs_rebel[0] }
+            'anchor': {'home': float(probs_anchor[2]), 'draw': float(probs_anchor[1]), 'away': float(probs_anchor[0])},
+            'rebel':  {'home': float(probs_rebel[2]),  'draw': float(probs_rebel[1]),  'away': float(probs_rebel[0])},
         }
 
     except Exception as e:
-        print(f"Model 2 Error ({league_code}): {e}")
+        print(f"Anchor/Rebel error ({league_code}): {e}")
+        import traceback; traceback.print_exc()
         return None
