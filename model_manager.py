@@ -585,6 +585,53 @@ class ModelManager:
     def get_stats(self):
         return self._load_stats()
 
+    def get_model_metrics(self):
+        """
+        Returns per-league model quality metrics (log-loss, F1) from the
+        most recent training run. Used by /the-ai to display calibration quality.
+        Structure: { league_code: { 'trinity': {log_loss, log_loss_std},
+                                    'anchor':  {f1, log_loss},
+                                    'rebel':   {f1, log_loss} } }
+        """
+        result = {}
+        for league_code in LEAGUE_CONFIG:
+            entry = {}
+            # Trinity metrics (stored on the engine object in code_1._engines)
+            try:
+                from models import code_1
+                engine = code_1._engines.get(league_code)
+                if engine:
+                    entry['trinity'] = getattr(engine, 'cv_metrics', {})
+            except Exception:
+                pass
+            # Anchor/Rebel metrics (stored on HybridPipeline in code_2._pipelines)
+            try:
+                entry.update(code_2.get_model_metrics(league_code))
+            except Exception:
+                pass
+            result[league_code] = entry
+        return result
+
+    def retrain_all(self):
+        """
+        4.3: Re-run full pipeline for all five leagues — data fetch, feature
+        engineering, and model training. Called after /refresh-global so models
+        always reflect the latest completed matchday results.
+        Runs synchronously inside the background thread started by /refresh-global.
+        """
+        print(":: RETRAIN START ::")
+        for league_code in LEAGUE_CONFIG:
+            try:
+                print(f"  Retraining {league_code}...")
+                # Calling _generate_fresh_data with cleared cache forces full
+                # re-fetch + re-engineering + re-training via code_1/code_2
+                self._generate_fresh_data(league_code)
+                self._set_cache(league_code, self._generate_fresh_data(league_code))
+                print(f"  {league_code} retrained and cached.")
+            except Exception as e:
+                print(f"  Retrain error ({league_code}): {e}")
+        print(":: RETRAIN COMPLETE ::")
+
     def get_last_updated(self):
         if not supabase:
             return 'Unknown'
