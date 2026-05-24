@@ -3,7 +3,7 @@ import math
 import threading
 import traceback
 from flask import Flask, render_template, redirect, url_for, request
-from model_manager import ModelManager
+from model_manager import ModelManager, _memory_cache
 import master_feed
 
 app = Flask(__name__)
@@ -205,7 +205,6 @@ def the_ai():
     for lc, cfg in {'E0': 10, 'SP1': 10, 'D1': 9, 'I1': 10, 'F1': 10}.items():
         try:
             if _memory_cache.get(lc):  # only use already-cached leagues
-                from model_manager import _memory_cache
                 cached_data = _memory_cache[lc]['data']
                 games_played = len(cached_data.get('history', []))
                 games_per_round = cfg
