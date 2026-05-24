@@ -241,8 +241,20 @@ class ModelManager:
     # -------------------------------------------------------------------------
     # SUPABASE — PREDICTIONS ARCHIVE
     # -------------------------------------------------------------------------
+    # Path for local fallback archive (used when Supabase is not configured)
+    _LOCAL_ARCHIVE_PATH = os.path.join(os.path.dirname(__file__), 'predictions_archive.json')
+
     def _load_archive(self):
         if not supabase:
+            # Fallback: load from local JSON file so predictions survive restarts
+            try:
+                if os.path.exists(self._LOCAL_ARCHIVE_PATH):
+                    with open(self._LOCAL_ARCHIVE_PATH, 'r') as f:
+                        archive = json.load(f)
+                    print(f"Archive loaded from local JSON: {len(archive)} entries.")
+                    return archive
+            except Exception as e:
+                print(f"Local archive load error: {e}")
             return {}
         try:
             result = supabase.table('predictions_archive').select('*').execute()
@@ -262,6 +274,22 @@ class ModelManager:
     def _save_to_archive(self, game_id, predictions):
         """Merge-write: never overwrites a valid existing prediction."""
         if not supabase:
+            # Fallback: persist to local JSON file
+            existing = self.archive.get(game_id, {})
+            merged = dict(existing)
+            updated = False
+            for key, value in predictions.items():
+                if value and value != 'N/A':
+                    if not existing.get(key) or existing[key] == 'N/A':
+                        merged[key] = value
+                        updated = True
+            if updated:
+                self.archive[game_id] = merged
+                try:
+                    with open(self._LOCAL_ARCHIVE_PATH, 'w') as f:
+                        json.dump(self.archive, f, indent=2)
+                except Exception as e:
+                    print(f"Local archive save error: {e}")
             return
 
         existing = self.archive.get(game_id, {})
